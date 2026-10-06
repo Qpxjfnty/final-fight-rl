@@ -1,0 +1,21 @@
+{
+  "name": "final-fight-rl",
+  "version": "0.1.0",
+  "description": "A turn-based crowd-control combat prototype for the browser.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "ipad": "node scripts/ipad-playtest.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run test && npm run build",
+    "simulate": "tsx scripts/playthrough.ts"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vite": "^6.4.1",
+    "tsx": "^4.20.6"
+  }
+}
