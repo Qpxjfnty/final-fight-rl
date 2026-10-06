@@ -22,7 +22,7 @@ function canWalk(state: State, from: Pos, to: Pos, ignoredId?: number): boolean 
 
 function emptyPreview(): Preview {
   return {
-    valid: false, reason: '', comboStage: 0, hits: [], pushes: [], lunges: [], destination: null,
+    valid: false, reason: '', freeStep: false, comboStage: 0, hits: [], pushes: [], lunges: [], destination: null,
     path: [], knockdowns: [], interrupted: [], cancelled: [], threats: [], incomingDamage: 0,
   };
 }
@@ -139,11 +139,14 @@ function simulate(original: State, command: Command): Simulation {
   const suppressed = new Set<number>();
   const spentTurn = new Set<number>();
   const justAttacked = new Set<number>();
-  state.beat += 1;
+  const freeStep = state.openingStepAvailable && state.beat === 0 && command.type === 'Step';
+  details.freeStep = freeStep;
+  state.openingStepAvailable = false;
+  if (!freeStep) state.beat += 1;
   state.stats.actions[command.type] += 1;
 
   if (command.type !== 'Strike' || state.player.combo?.targetId !== command.targetId) breakCombo(state, events);
-  if (command.type !== 'Vault' && state.player.vaultCooldown > 0) state.player.vaultCooldown -= 1;
+  if (!freeStep && command.type !== 'Vault' && state.player.vaultCooldown > 0) state.player.vaultCooldown -= 1;
 
   const suppress = (enemy: Enemy): void => {
     suppressed.add(enemy.id);
@@ -160,7 +163,9 @@ function simulate(original: State, command: Command): Simulation {
     details.destination = position(command.target);
     details.path = [position(command.target)];
     Object.assign(state.player, command.target);
-    events.push(`Step to ${command.target.x},${command.target.y}.`);
+    events.push(freeStep
+      ? `Free opening step to ${command.target.x},${command.target.y}. Enemies wait; act again.`
+      : `Step to ${command.target.x},${command.target.y}.`);
   } else if (command.type === 'Wait') {
     events.push('Wait one beat.');
   } else {
@@ -201,6 +206,11 @@ function simulate(original: State, command: Command): Simulation {
       state.player.vaultCooldown = CONFIG.vaultCooldown;
       events.push(`Vault over enemy ${target.id} to ${destination.x},${destination.y}.`);
     }
+  }
+
+  if (freeStep) {
+    state.log = [...state.log, ...events.map(event => `[${state.beat}] ${event}`)].slice(-80);
+    return { result: { accepted: true, state, events }, preview: details };
   }
 
   // Resolve only the tells already present before this beat. Every such enemy
@@ -277,7 +287,7 @@ export function createEncounter(): State {
     ['lunger', 2, 4], ['lunger', 8, 4],
   ];
   return {
-    version: 'combat-lab-v1', phase: 'combat', beat: 0,
+    version: 'combat-lab-v1', phase: 'combat', beat: 0, openingStepAvailable: true,
     player: { x: 5, y: 4, hp: CONFIG.playerHp, maxHp: CONFIG.playerHp, combo: null, vaultCooldown: 0 },
     enemies: placements.map(([kind, x, y], index) => ({
       id: index + 1, kind, x, y, hp: CONFIG.enemyHp, maxHp: CONFIG.enemyHp,

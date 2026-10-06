@@ -2,10 +2,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createEncounter, legalCommands, step } from '../src/engine';
 import { distance, type Command, type State } from '../src/model';
+import { combatSignature } from './winning-search';
 
 // A bounded tactical search is a feasibility probe, not a claim about human difficulty.
 interface Candidate { state: State; commands: Command[] }
-const signature = (s: State) => JSON.stringify([s.player, s.enemies, s.phase]);
 function score(s: State): number {
   const living = s.enemies.filter(e => e.hp > 0);
   const remainingHp = living.reduce((sum, enemy) => sum + enemy.hp, 0);
@@ -27,7 +27,7 @@ for (let depth = 0; depth < 65 && !winner; depth++) {
     for (const command of legalCommands(candidate.state)) {
       const result = step(candidate.state, command);
       if (!result.accepted || result.state.phase === 'dead') continue;
-      const key = signature(result.state), value = score(result.state);
+      const key = combatSignature(result.state), value = score(result.state);
       if ((seen.get(key) ?? -Infinity) >= value) continue;
       const entry = { state: result.state, commands: [...candidate.commands, command] };
       if (result.state.phase === 'won') {
@@ -36,17 +36,17 @@ for (let depth = 0; depth < 65 && !winner; depth++) {
     }
   }
   beam = [...next.values()].sort((a, b) => score(b.state) - score(a.state)).slice(0, 96);
-  for (const candidate of beam) seen.set(signature(candidate.state), score(candidate.state));
+  for (const candidate of beam) seen.set(combatSignature(candidate.state), score(candidate.state));
   if (!beam.length && !winner) break;
 }
 if (!winner) throw new Error('The bounded search did not find a winning line; inspect encounter balance.');
 
 let replayed = createEncounter();
-const beats = winner.commands.map(command => {
+const actions = winner.commands.map((command, index) => {
   const result = step(replayed, command);
   if (!result.accepted) throw new Error('Search emitted an invalid command.');
   replayed = result.state;
-  return { command, state: replayed, events: result.events };
+  return { action: index + 1, beat: replayed.beat, command, state: replayed, events: result.events };
 });
 if (JSON.stringify(replayed) !== JSON.stringify(winner.state)) throw new Error('Replay was nondeterministic.');
 let reckless = createEncounter();
@@ -60,9 +60,9 @@ const dir = fileURLToPath(new URL('../work/qa/combat-lab/', import.meta.url));
 mkdirSync(dir, { recursive: true });
 writeFileSync(`${dir}/playthrough.json`, JSON.stringify({
   note: 'Bounded search checks feasibility; human pacing and fun remain unverified.',
-  initial, summary: { beat: replayed.beat, hp: replayed.player.hp, ...replayed.stats },
+  initial, summary: { actionCount: winner.commands.length, beat: replayed.beat, hp: replayed.player.hp, ...replayed.stats },
   stationaryStrikes: { phase: reckless.phase, beat: reckless.beat, hp: reckless.player.hp, ...reckless.stats },
-  beats,
+  actions,
 }, null, 2));
-console.log(JSON.stringify({ winning: { beats: replayed.beat, hp: replayed.player.hp, ...replayed.stats },
+console.log(JSON.stringify({ winning: { actionCount: winner.commands.length, beats: replayed.beat, hp: replayed.player.hp, ...replayed.stats },
   stationaryStrikes: { phase: reckless.phase, beats: reckless.beat, hp: reckless.player.hp, ...reckless.stats } }, null, 2));

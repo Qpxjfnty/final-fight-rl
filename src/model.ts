@@ -22,11 +22,12 @@ export interface Stats {
 }
 export interface State {
   version: string; phase: 'combat' | 'won' | 'dead'; beat: number;
+  openingStepAvailable: boolean;
   player: Player; enemies: Enemy[]; stats: Stats; log: string[];
 }
 export interface Threat { enemyId: number; cells: Pos[]; damage: number }
 export interface Preview {
-  valid: boolean; reason: string; comboStage: 0 | 1 | 2 | 3;
+  valid: boolean; reason: string; freeStep: boolean; comboStage: 0 | 1 | 2 | 3;
   hits: { enemyId: number; damage: number }[];
   pushes: { enemyId: number; from: Pos; to: Pos }[];
   lunges: { enemyId: number; from: Pos; to: Pos }[];

@@ -5,6 +5,8 @@ import { CONFIG, DIRS, add, equal, inside, key, type Command, type Enemy, type E
 
 function fixture(): State {
   const state = createEncounter();
+  // Tactical fixtures represent a fight already in progress.
+  state.openingStepAvailable = false;
   state.enemies = [];
   Object.assign(state.player, { x: 5, y: 4 });
   return state;
@@ -60,6 +62,92 @@ test('combat lab starts a repeatable surrounding encounter in a 9 by 7 interior'
     const distance = Math.max(Math.abs(e.x - state.player.x), Math.abs(e.y - state.player.y));
     assert.ok(distance >= 2 && distance <= 3);
   }
+});
+
+test('only the first opening Step is free and leaves enemies unchanged before another player action', () => {
+  const state = createEncounter();
+  const original = structuredClone(state);
+  const command: Command = { type: 'Step', target: { x: 6, y: 5 } };
+  const predicted = preview(state, command);
+  assert.equal(predicted.valid, true);
+  assert.equal(predicted.freeStep, true);
+  assert.equal(predicted.incomingDamage, 0);
+  assert.deepEqual(predicted.threats, []);
+  assert.deepEqual(state, original, 'Aiming the free step does not spend it.');
+  const result = step(state, command);
+  assert.equal(result.accepted, true);
+  const moved = result.state;
+  assert.deepEqual(position(moved.player), { x: 6, y: 5 });
+  assert.equal(moved.beat, 0);
+  assert.equal(moved.player.hp, 24);
+  assert.equal(moved.openingStepAvailable, false);
+  assert.equal(moved.stats.actions.Step, 1);
+  assert.deepEqual(moved.enemies, state.enemies);
+  assert.deepEqual(state, original);
+  const second: Command = { type: 'Step', target: { x: 5, y: 4 } };
+  assert.equal(preview(moved, second).freeStep, false);
+  const next = apply(moved, second);
+  assert.equal(next.beat, 1);
+  assert.equal(next.stats.actions.Step, 2);
+  assert.notDeepEqual(next.enemies, moved.enemies, 'The second Step gives enemies their normal turn.');
+});
+
+test('an opening strike, throw, vault or wait forfeits the free Step', () => {
+  for (const type of ['Strike', 'Throw', 'Vault', 'Wait'] as const) {
+    const state = createEncounter();
+    Object.assign(state.enemies[0], { x: 6, y: 4 });
+    const command: Command = type === 'Wait' ? { type }
+      : type === 'Throw' ? { type, targetId: 1, direction: { x: 0, y: -1 } }
+      : { type, targetId: 1 };
+    assert.equal(preview(state, command).freeStep, false, type);
+    const next = apply(state, command);
+    assert.equal(next.openingStepAvailable, false, type);
+    const move = legalCommands(next).find(candidate => candidate.type === 'Step');
+    assert.ok(move);
+    assert.equal(preview(next, move).freeStep, false, type);
+    assert.equal(apply(next, move).beat, 2, type);
+  }
+});
+
+test('invalid opening actions and repeated previews preserve the free Step; restarting restores it', () => {
+  const state = createEncounter();
+  const original = structuredClone(state);
+  const invalid: Command[] = [
+    { type: 'Step', target: { x: 5, y: 2 } },
+    { type: 'Strike', targetId: 999 },
+    { type: 'Vault', targetId: 1 },
+  ];
+  for (const command of invalid) {
+    assert.equal(preview(state, command).valid, false);
+    assert.equal(preview(state, command).freeStep, false);
+    assert.equal(step(state, command).accepted, false);
+  }
+  const command: Command = { type: 'Step', target: { x: 6, y: 4 } };
+  preview(state, command);
+  preview(state, { type: 'Wait' });
+  legalCommands(state);
+  assert.deepEqual(state, original);
+  assert.equal(step(state, command).state.beat, 0);
+  const restarted = createEncounter();
+  assert.equal(restarted.openingStepAvailable, true);
+  assert.equal(preview(restarted, command).freeStep, true);
+});
+
+test('the free opening Step advances no enemy intent, knockdown, recovery or cooldown timers', () => {
+  const state = createEncounter();
+  state.enemies[0].down = 2;
+  state.enemies[1].recovery = 1;
+  tell(state.enemies[4], [{ x: 3, y: 4 }, { x: 4, y: 4 }, { x: 5, y: 4 }]);
+  state.player.vaultCooldown = 2;
+  const command: Command = { type: 'Step', target: { x: 5, y: 5 } };
+  const predicted = preview(state, command);
+  assert.deepEqual(predicted.cancelled, []);
+  assert.deepEqual(predicted.lunges, []);
+  const result = step(state, command);
+  assert.equal(result.accepted, true);
+  assert.deepEqual(result.state.enemies, state.enemies);
+  assert.equal(result.state.player.vaultCooldown, 2);
+  assert.equal(result.state.stats.cancelledAttacks, 0);
 });
 
 for (const kind of ['brawler', 'lunger'] as const) {
@@ -496,6 +584,7 @@ test('bounded fights stay deterministic, preserve inputs, and agree with every s
       assert.deepEqual(state, original);
       assert.deepEqual(result, step(state, command));
       const next = result.state;
+      assert.equal(next.beat, state.beat + (predicted.freeStep ? 0 : 1));
       assert.equal(next.player.hp, Math.max(0, state.player.hp - predicted.incomingDamage));
       assert.equal(next.stats.damageTaken - state.stats.damageTaken, Math.min(state.player.hp, predicted.incomingDamage));
       if (predicted.destination) assert.deepEqual(position(next.player), predicted.destination);

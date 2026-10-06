@@ -6,7 +6,7 @@ export interface SearchOptions {
   mode: SearchMode;
   /** Sampled search preference; combo seeks a combo-focused witness, not unbiased action frequencies. */
   objective?: 'balanced' | 'combo';
-  /** Number of additional player actions from the supplied initial state. */
+  /** Maximum additional player actions, including a free opening Step. Legacy name; not elapsed beats. */
   maxBeats: number;
   maxTransitions: number;
   beamWidth: number;
@@ -16,6 +16,9 @@ export interface SearchOptions {
 }
 export interface WinningSequence {
   commands: Command[];
+  /** Every accepted command, including the free opening Step. */
+  actionCount: number;
+  /** Elapsed combat beats; a free opening Step adds no beat. */
   beats: number;
   hp: number;
   actions: Record<Action, number>;
@@ -44,6 +47,10 @@ const actionOrder: Record<Action, number> = { Strike: 0, Throw: 1, Vault: 2, Ste
 const orderedCommands = (state: State): Command[] => legalCommands(state)
   .sort((a, b) => actionOrder[a.type] - actionOrder[b.type]);
 
+/** Combat-equivalent states must preserve the one-time opening action entitlement. */
+export const combatSignature = (state: State): string =>
+  JSON.stringify([state.player, state.enemies, state.phase, state.openingStepAvailable]);
+
 function validate(options: SearchOptions): void {
   if (options.mode !== 'exhaustive' && options.mode !== 'sampled') throw new RangeError('Unknown search mode.');
   if (options.objective !== undefined && options.objective !== 'balanced' && options.objective !== 'combo') {
@@ -59,7 +66,7 @@ function validate(options: SearchOptions): void {
 /**
  * Find terminal wins and stream their command lists and action counts.
  *
- * Exhaustive mode walks the entire allowed legal command tree up to maxBeats,
+ * Exhaustive mode walks the entire allowed legal command tree up to maxBeats player actions (including a free opening Step),
  * unless maxTransitions is reached. An optional pure allowCommand predicate
  * restricts both modes before simulation and transition accounting. It
  * deliberately never merges states: different
@@ -98,7 +105,8 @@ export function searchWins(initial: State, options: SearchOptions): SearchResult
     }
     result.wins += 1;
     // A consumer may retain or mutate its record without changing the search.
-    options.onWin?.({ commands: structuredClone(commands), beats: commands.length, hp: state.player.hp, actions: counts });
+    options.onWin?.({ commands: structuredClone(commands), actionCount: commands.length,
+      beats: state.beat - initial.beat, hp: state.player.hp, actions: counts });
   };
   const budgetAvailable = (): boolean => {
     if (result.transitions < options.maxTransitions) return true;
@@ -158,10 +166,9 @@ export function searchWins(initial: State, options: SearchOptions): SearchResult
       + living.reduce((sum, enemy) => sum + enemy.down * 0.5, 0)
       - nearest - (state.beat - start.beat) * 1.2;
   };
-  const signature = (state: State): string => JSON.stringify([state.player, state.enemies, state.phase]);
   interface Candidate { state: State; commands: Command[]; value: number }
   let beam: Candidate[] = [{ state: start, commands: [], value: score(start) }];
-  const seen = new Map<string, number>([[signature(start), beam[0].value]]);
+  const seen = new Map<string, number>([[combatSignature(start), beam[0].value]]);
   for (let depth = 0; depth < options.maxBeats && beam.length; depth++) {
     const next = new Map<string, Candidate>();
     for (const candidate of beam) {
@@ -174,13 +181,13 @@ export function searchWins(initial: State, options: SearchOptions): SearchResult
           continue;
         }
         if (depth + 1 === options.maxBeats) continue;
-        const key = signature(state), value = score(state);
+        const key = combatSignature(state), value = score(state);
         if ((seen.get(key) ?? -Infinity) >= value || (next.get(key)?.value ?? -Infinity) >= value) continue;
         next.set(key, { state, commands: [...candidate.commands, command], value });
       }
     }
     beam = [...next.values()].sort((a, b) => b.value - a.value).slice(0, options.beamWidth);
-    for (const candidate of beam) seen.set(signature(candidate.state), candidate.value);
+    for (const candidate of beam) seen.set(combatSignature(candidate.state), candidate.value);
   }
   return result;
 }

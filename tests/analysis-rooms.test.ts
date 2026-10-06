@@ -52,7 +52,9 @@ test('generated rooms allow every initial step and can be played by the real com
     for (const command of commands) {
       const result = step(state, command);
       assert.equal(result.accepted, true, result.reason);
-      assert.equal(result.state.beat, 1);
+      assert.equal(result.state.beat, command.type === 'Step' ? 0 : 1);
+      assert.equal(result.state.openingStepAvailable, false);
+      if (command.type === 'Step') assert.deepEqual(result.state.enemies, state.enemies);
       assert.equal(result.state.phase, 'combat');
     }
   }

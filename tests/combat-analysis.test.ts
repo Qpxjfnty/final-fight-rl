@@ -28,7 +28,7 @@ test('recorded wins must replay to victory with the claimed action counts and he
   const state = createEncounter();
   state.enemies = [{ ...state.enemies[0], x: 6, y: 4, hp: 1 }];
   const win: WinningSequence = {
-    commands: [{ type: 'Strike', targetId: state.enemies[0].id }], beats: 1, hp: 24,
+    commands: [{ type: 'Strike', targetId: state.enemies[0].id }], actionCount: 1, beats: 1, hp: 24,
     actions: { Step: 0, Strike: 1, Throw: 0, Vault: 0, Wait: 0 },
   };
   const original = structuredClone(state);
@@ -36,9 +36,23 @@ test('recorded wins must replay to victory with the claimed action counts and he
   assert.deepEqual(state, original);
   assert.throws(() => verifyWin(state, { ...win, hp: 23 }));
   assert.throws(() => verifyWin(state, { ...win, beats: 2 }));
+  assert.throws(() => verifyWin(state, { ...win, actionCount: 2 }));
   assert.throws(() => verifyWin(state, { ...win, actions: { ...win.actions, Strike: 2 } }));
   assert.throws(() => verifyWin(state, { ...win, commands: [{ type: 'Wait' }] }));
   assert.throws(() => verifyWin(state, { ...win, commands: [{ type: 'Strike', targetId: 999 }] }));
+});
+
+test('win verification distinguishes free opening moves from elapsed combat beats', () => {
+  const initial = createEncounter();
+  initial.enemies = [{ ...initial.enemies[0], x: 6, y: 4, hp: 1 }];
+  const win: WinningSequence = {
+    commands: [{ type: 'Step', target: { x: 5, y: 5 } }, { type: 'Strike', targetId: initial.enemies[0].id }],
+    actionCount: 2, beats: 1, hp: 24, actions: { Step: 1, Strike: 1, Throw: 0, Vault: 0, Wait: 0 },
+  };
+  assert.doesNotThrow(() => verifyWin(initial, win));
+  assert.throws(() => verifyWin(initial, { ...win, beats: 2 }), 'The opening Step must not be counted as a beat');
+  assert.throws(() => verifyWin(initial, { ...win, actionCount: 1 }), 'The free Step must still be counted as an action');
+  assert.throws(() => verifyWin(initial, { ...win, actions: { ...win.actions, Step: 0 } }));
 });
 
 test('combo qualification measures actual finisher damage rather than just the presence of a combo kill', () => {
@@ -47,7 +61,7 @@ test('combo qualification measures actual finisher damage rather than just the p
     state.enemies = [{ ...state.enemies[0], x: 6, y: 4, hp }];
     const metrics = verifyWin(state, {
       commands: Array.from({ length: 3 }, () => ({ type: 'Strike' as const, targetId: state.enemies[0].id })),
-      beats: 3, hp: 24, actions: { Step: 0, Strike: 3, Throw: 0, Vault: 0, Wait: 0 },
+      actionCount: 3, beats: 3, hp: 24, actions: { Step: 0, Strike: 3, Throw: 0, Vault: 0, Wait: 0 },
     });
     assert.equal(metrics.completedCombos, 1);
     assert.equal(metrics.finisherKills, 1);
@@ -63,7 +77,7 @@ test('combo qualification measures actual finisher damage rather than just the p
   ];
   const chip = verifyWin(state, {
     commands: [{ type: 'Throw', targetId: state.enemies[0].id, direction: { x: 1, y: 0 } }],
-    beats: 1, hp: 24, actions: { Step: 0, Strike: 0, Throw: 1, Vault: 0, Wait: 0 },
+    actionCount: 1, beats: 1, hp: 24, actions: { Step: 0, Strike: 0, Throw: 1, Vault: 0, Wait: 0 },
   });
   assert.equal(chip.throwDamage, 2, 'Both bodies in a collision contribute actual damage.');
   assert.equal(finisherShare(chip), 0);
@@ -89,7 +103,7 @@ test('analysis reports distinguish horizon exhaustion from incomplete searches a
     const rooms = JSON.parse(readFileSync(join(exhaustive, 'rooms.json'), 'utf8'));
     assert.deepEqual(rooms[0].initial, createEncounter());
     assert.equal(rooms[1].seed, 0);
-    assert.match(readFileSync(join(exhaustive, 'wins.csv'), 'utf8'), /^room,win,beats,hp,Step,Strike,Throw,Vault,Wait,.*finisherDamageShare,comboFocused\n$/);
+    assert.match(readFileSync(join(exhaustive, 'wins.csv'), 'utf8'), /^room,win,actionCount,beats,hp,Step,Strike,Throw,Vault,Wait,.*finisherDamageShare,comboFocused\n$/);
     assert.equal(readFileSync(join(exhaustive, 'winning-sequences.jsonl'), 'utf8'), '');
     const sampled = runAnalysis({ ...base, mode: 'sampled', maxBeats: 1, maxTransitions: 1 });
     assert.notEqual(sampled, exhaustive, 'A second report must not overwrite the first.');

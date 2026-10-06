@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEncounter, legalCommands, step } from '../src/engine';
 import { type Action, type Command, type State } from '../src/model';
-import { searchWins, type SearchOptions, type WinningSequence } from '../scripts/winning-search';
+import { searchWins, combatSignature, type SearchOptions, type WinningSequence } from '../scripts/winning-search';
 
 const options: SearchOptions = { mode: 'exhaustive', maxBeats: 3, maxTransitions: 100_000, beamWidth: 16 };
 const emptyCounts = (): Record<Action, number> => ({ Step: 0, Strike: 0, Throw: 0, Vault: 0, Wait: 0 });
 
 function tinyEncounter(hp = 1): State {
   const state = createEncounter();
+  state.openingStepAvailable = false;
   state.enemies = [{
     id: 1, kind: 'brawler', x: 6, y: 4, hp, maxHp: 12, down: 0, recovery: 0,
     intent: { kind: 'punch', cells: [{ x: 5, y: 4 }], damage: 3 },
@@ -27,7 +28,8 @@ function bruteForce(initial: State, maxBeats: number): { wins: WinningSequence[]
       if (entry.state.phase === 'won') {
         const actions = emptyCounts();
         for (const command of entry.commands) actions[command.type]++;
-        wins.push({ commands: entry.commands, beats: entry.commands.length, hp: entry.state.player.hp, actions });
+        wins.push({ commands: entry.commands, actionCount: entry.commands.length,
+          beats: entry.state.beat - initial.beat, hp: entry.state.player.hp, actions });
       } else if (entry.state.phase === 'combat' && depth < maxBeats) {
         for (const command of legalCommands(entry.state)) {
           const result = step(entry.state, command);
@@ -54,9 +56,44 @@ function verifyReplay(initial: State, win: WinningSequence): void {
   }
   assert.equal(state.phase, 'won');
   assert.equal(win.hp, state.player.hp);
+  assert.equal(win.actionCount, win.commands.length);
   assert.equal(win.beats, state.beat - initial.beat);
   assert.deepEqual(win.actions, counts);
 }
+
+test('both searches count a free opening Step as an action without spending a combat beat', () => {
+  const initial = tinyEncounter();
+  initial.openingStepAvailable = true;
+  const allowCommand = (state: State, command: Command): boolean => state.player.y === 4
+    ? command.type === 'Step' && command.target.x === 5 && command.target.y === 5
+    : command.type === 'Strike';
+  for (const mode of ['exhaustive', 'sampled'] as const) {
+    const wins: WinningSequence[] = [];
+    searchWins(initial, { ...options, mode, maxBeats: 2, allowCommand, onWin: win => wins.push(win) });
+    assert.equal(wins.length, 1, mode);
+    verifyReplay(initial, wins[0]);
+    assert.equal(wins[0].actionCount, 2);
+    assert.equal(wins[0].beats, 1);
+    assert.deepEqual(wins[0].actions, { Step: 1, Strike: 1, Throw: 0, Vault: 0, Wait: 0 });
+    assert.equal(searchWins(initial, { ...options, mode, maxBeats: 1, allowCommand }).wins, 0,
+      'The action horizon still charges one action for the free Step');
+  }
+});
+
+test('sampled state identity distinguishes an unused opening Step from the same positions after it is spent', () => {
+  const available = tinyEncounter();
+  available.openingStepAvailable = true;
+  const consumed = structuredClone(available);
+  consumed.openingStepAvailable = false;
+  assert.notEqual(combatSignature(available), combatSignature(consumed));
+  const command: Command = { type: 'Step', target: { x: 5, y: 5 } };
+  const free = step(available, command).state;
+  const ordinary = step(consumed, command).state;
+  assert.equal(free.beat, 0);
+  assert.equal(ordinary.beat, 1);
+  assert.ok(free.enemies[0].intent, 'The free move preserves the pending attack');
+  assert.equal(ordinary.enemies[0].intent, null, 'An ordinary move lets the enemy cancel its stale attack');
+});
 
 test('exhaustive search matches every reference winning path, action count, and transition through the horizon', () => {
   const initial = tinyEncounter();
@@ -101,7 +138,7 @@ test('exhaustive search retains detours that revisit an earlier combat state', (
   const finish: Command = { type: 'Strike', targetId: 1 };
   assert.ok(paths.has(JSON.stringify([finish])));
   assert.ok(paths.has(JSON.stringify([...loop, finish])), 'The revisited state is a separate winning sequence');
-  assert.ok(wins.every(win => win.beats <= options.maxBeats));
+  assert.ok(wins.every(win => win.actionCount <= options.maxBeats));
 });
 
 test('horizon completion and transition truncation are distinct, including no-win results', () => {
@@ -150,7 +187,7 @@ test('zero horizon and already terminal states are handled without taking a turn
   const won = searchWins(initial, { ...options, maxBeats: 0, onWin: win => wins.push(win) });
   assert.equal(won.wins, 1);
   assert.equal(won.transitions, 0);
-  assert.deepEqual(wins, [{ commands: [], beats: 0, hp: initial.player.hp, actions: emptyCounts() }]);
+  assert.deepEqual(wins, [{ commands: [], actionCount: 0, beats: 0, hp: initial.player.hp, actions: emptyCounts() }]);
   initial.phase = 'dead';
   const dead = searchWins(initial, options);
   assert.equal(dead.wins, 0);

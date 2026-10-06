@@ -8,7 +8,7 @@ The demo runs entirely in the browser on desktop or tablet. No installation, acc
 
 ## The fight
 
-Six enemies surround you in a 9×7 arena. You have 24 HP; each enemy has 12 HP. Your five actions are **Step, Strike, Throw, Vault, and Wait**. One valid action advances one beat. Inspection, targeting, cancellation, and invalid actions are free.
+Six enemies surround you in a 9×7 arena. You have 24 HP; each enemy has 12 HP. Your five actions are **Step, Strike, Throw, Vault, and Wait**. One valid action normally advances one beat. If your **very first combat action is Step**, that one move is free: enemies wait, the beat and timers stay unchanged, and you act again. Any other first action gives up this opening move; Vault is never free. Inspection, targeting, cancellation, and invalid actions are free and do not spend the opening.
 
 - **Strike:** hit and interrupt one adjacent enemy. Three consecutive strikes against the same target deal **1 + 1 + 10 damage**, defeating a fresh enemy. Changing target or action, or taking damage, breaks the combo.
 - **Throw:** choose an adjacent enemy and a direction. Throw it up to three cells for 1 damage. A collision deals 1 damage to the first enemy hit; both enemies are knocked down for the throw beat and two further beats. The throw stops before a wall or body and requires an empty landing cell.
@@ -44,7 +44,7 @@ npm run analyze     # Generate analysis rooms and record winning action sequence
 npm run preview     # Serve the built dist/ locally
 ```
 
-The combat tests cover timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
+The combat tests cover the one-time free opening Step, timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
 
 ## Combo viability and winning-sequence analysis
 
@@ -62,7 +62,7 @@ The default searches the fixed demo plus four generated rooms, using seeds 1–4
 
 Each run creates a new directory under `work/qa/combat-analysis/` with:
 
-- `wins.csv`: one row per discovered win, with room, win number, beats, remaining HP, separate **Step / Strike / Throw / Vault / Wait** counts, completed/broken combos, finisher kills, and effective damage from finishers, ordinary strikes, and throws. It also records the finisher damage share and whether the win qualifies.
+- `wins.csv`: one row per discovered win, with room, win number, total actions, elapsed combat beats, remaining HP, separate **Step / Strike / Throw / Vault / Wait** counts (including a free opening Step, if used), completed/broken combos, finisher kills, and effective damage from finishers, ordinary strikes, and throws. It also records the finisher damage share and whether the win qualifies. The search horizon counts player actions, including the free Step; the existing `--max-beats` option retains its name for compatibility.
 - `winning-sequences.jsonl`: the full command sequence for every CSV row, including targets and throw directions. Every win is replayed through the game engine before recording.
 - `rooms.json`: exact initial states for reproduction.
 - `report.md` and `summary.json`: each room's combo viability result, a qualifying witness when found, coverage, search limits, action-count ranges and averages, damage statistics, and action-usage profiles.

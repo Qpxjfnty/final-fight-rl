@@ -18,14 +18,15 @@ Usage: npm run analyze -- [options]
   --mode sampled|exhaustive  Search strategy (default: sampled)
   --rooms N                 Generated rooms in addition to the fixed demo (default: 4)
   --seed N                  First unsigned 32-bit room seed (default: 1)
-  --max-beats N             Maximum actions in each sequence (default: 32)
+  --max-beats N             Maximum player actions, including a free Step (default: 32)
   --objective combo|balanced  Sampled search priority (default: combo)
   --max-transitions N       Simulated-action budget per room (default: 75000)
   --beam-width N            Paths retained per sampled-search layer (default: 96)
   --output PATH             Parent folder for a new report directory
   --help                    Show this help
 
-Exhaustive mode keeps distinct paths, including loops, up to max-beats. It only
+The legacy --max-beats name counts player actions, not elapsed combat beats.
+Exhaustive mode keeps distinct paths, including loops, up to that action limit. It only
 claims completeness when all paths through that horizon have been visited.
 Sampled mode prunes paths and is a biased sample, not an exhaustive census.
 A room passes when at least one replayed win gets more than 50% of its effective
@@ -103,7 +104,8 @@ export function verifyWin(initial: State, win: WinningSequence): WinMetrics {
     state = result.state;
     counts[command.type] += 1;
   }
-  if (state.phase !== 'won' || state.player.hp !== win.hp || win.beats !== win.commands.length
+  if (state.phase !== 'won' || state.player.hp !== win.hp || win.actionCount !== win.commands.length
+    || win.beats !== state.beat - initial.beat
     || ACTIONS.some(action => win.actions[action] !== counts[action])) {
     throw new Error('Winning sequence failed replay or action-count verification.');
   }
@@ -139,17 +141,18 @@ export function runAnalysis(options: AnalysisOptions): string {
   const markdown = [
     '# Combat action-usage analysis', '',
     `Mode: **${options.mode}**, objective: **${options.objective}**. Horizon: **${options.maxBeats} actions**. Budget: **${options.maxTransitions} simulated actions per room**.`, '',
+    'A free opening Step counts as one action and zero combat beats. The horizon includes every player action. The legacy maxBeats option names this action limit.', '',
     'A recorded win is replay-verified. Sampled results are biased toward the search heuristic; action frequencies are not player usage rates or proof that an action is necessary.', '',
     'Only a completed exhaustive search covers every allowed legal winning sequence within its horizon. Partial searches cannot establish that a room is unwinnable. Loops remain distinct sequences and are bounded by the action limit.', '',
     '**Room pass criterion:** at least one replayed winning sequence gets **more than 50% of actual enemy HP removed from combo finishers**. Chip-damage wins are allowed and do not fail a room. Missing such a witness in a partial search means review is needed, not that only chip strategies can win.', '',
     'The combo objective deliberately searches for qualifying witnesses. Use balanced to explore alternate strategies; neither sampled mode estimates the frequency of all possible wins.', '',
   ];
   try {
-    writeSync(csv, ['room', 'win', 'beats', 'hp', ...ACTIONS, ...METRICS, 'finisherDamageShare', 'comboFocused'].join(',') + '\n');
+    writeSync(csv, ['room', 'win', 'actionCount', 'beats', 'hp', ...ACTIONS, ...METRICS, 'finisherDamageShare', 'comboFocused'].join(',') + '\n');
     writeFileSync(join(directory, 'rooms.json'), JSON.stringify(rooms, null, 2) + '\n');
     for (const room of rooms) {
       let recorded = 0;
-      let minBeats = Infinity, maxBeats = 0, minHp = Infinity, maxHp = 0;
+      let minActions = Infinity, maxActions = 0, minBeats = Infinity, maxBeats = 0, minHp = Infinity, maxHp = 0;
       const profiles = new Map<string, number>();
       let winsWithoutFinishers = 0, qualifyingWins = 0, finisherShareTotal = 0, minFinisherShare = Infinity, maxFinisherShare = 0;
       let witness: (WinningSequence & { metrics: WinMetrics; finisherDamageShare: number }) | null = null;
@@ -164,7 +167,7 @@ export function runAnalysis(options: AnalysisOptions): string {
           const comboFocused = share > 0.5;
           if (comboFocused) {
             qualifyingWins += 1;
-            if (!witness || win.beats < witness.beats || (win.beats === witness.beats && win.hp > witness.hp)) {
+            if (!witness || win.actionCount < witness.actionCount || (win.actionCount === witness.actionCount && win.hp > witness.hp)) {
               witness = { ...win, metrics, finisherDamageShare: share };
             }
           }
@@ -176,11 +179,12 @@ export function runAnalysis(options: AnalysisOptions): string {
             tactics[metric].total += metrics[metric];
           }
           recorded += 1;
+          minActions = Math.min(minActions, win.actionCount); maxActions = Math.max(maxActions, win.actionCount);
           minBeats = Math.min(minBeats, win.beats); maxBeats = Math.max(maxBeats, win.beats);
           minHp = Math.min(minHp, win.hp); maxHp = Math.max(maxHp, win.hp);
           const profile = ACTIONS.map(action => win.actions[action]).join(',');
           profiles.set(profile, (profiles.get(profile) ?? 0) + 1);
-          writeSync(csv, [room.id, recorded, win.beats, win.hp, ...ACTIONS.map(action => win.actions[action]),
+          writeSync(csv, [room.id, recorded, win.actionCount, win.beats, win.hp, ...ACTIONS.map(action => win.actions[action]),
             ...METRICS.map(metric => metrics[metric]), share, comboFocused].join(',') + '\n');
           writeSync(jsonl, JSON.stringify({ room: room.id, win: recorded, ...win, metrics, finisherDamageShare: share, comboFocused }) + '\n');
         },
@@ -192,6 +196,7 @@ export function runAnalysis(options: AnalysisOptions): string {
         room: room.id, seed: room.seed, verdict, roomCheck, ...result,
         qualifyingWins, comboWitness: witness, winsWithoutFinishers, tactics: recorded ? tactics : null,
         finisherDamageShare: recorded ? { min: minFinisherShare, max: maxFinisherShare, mean: finisherShareTotal / recorded } : null,
+        actionCount: recorded ? { min: minActions, max: maxActions } : null,
         beats: recorded ? { min: minBeats, max: maxBeats } : null,
         hp: recorded ? { min: minHp, max: maxHp } : null,
         actionProfiles: [...profiles].map(([counts, wins]) => ({
@@ -203,7 +208,7 @@ export function runAnalysis(options: AnalysisOptions): string {
       markdown.push(`## ${room.id}`, '',
         `**${roomCheck}** · ${qualifyingWins} combo-focused wins out of ${recorded} verified winning sequences · ${result.transitions} simulated actions · ${result.completed ? 'complete within horizon' : 'partial search'} (${result.stopReason}).`, '');
       if (recorded) {
-        markdown.push(`Wins take ${minBeats}–${maxBeats} actions and finish with ${minHp}–${maxHp} HP.`, '',
+        markdown.push(`Wins take ${minActions}–${maxActions} player actions across ${minBeats}–${maxBeats} combat beats and finish with ${minHp}–${maxHp} HP.`, '',
           `${winsWithoutFinishers} wins use no combo finishers (allowed). Finisher damage share: minimum ${(minFinisherShare * 100).toFixed(1)}%, mean ${(finisherShareTotal / recorded * 100).toFixed(1)}%, maximum ${(maxFinisherShare * 100).toFixed(1)}%. Damage counts actual enemy HP removed, excluding overkill.`, '',
           '| Combat metric | Minimum | Mean | Maximum |', '| --- | ---: | ---: | ---: |');
         for (const metric of METRICS) {
@@ -220,11 +225,11 @@ export function runAnalysis(options: AnalysisOptions): string {
       }
     }
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({
-      schemaVersion: 1, options, comboCriterion: { metric: 'effectiveFinisherDamageShare', operator: '>', threshold: 0.5 },
-      note: 'Pass requires one qualifying witness; chip wins are allowed. Completeness is bounded by maxBeats. Sampled searches are biased and never exhaustive.', rooms: reports,
+      schemaVersion: 2, options, comboCriterion: { metric: 'effectiveFinisherDamageShare', operator: '>', threshold: 0.5 },
+      note: 'Pass requires one qualifying witness; chip wins are allowed. Completeness is bounded by maxBeats player actions, including a free opening Step. Sampled searches are biased and never exhaustive.', rooms: reports,
     }, null, 2) + '\n');
     markdown.push('## Files', '',
-      '- `wins.csv`: one row per discovered win, with all five action counts.',
+      '- `wins.csv`: one row per discovered win, with total player actions, elapsed combat beats, and all five action counts.',
       '- `winning-sequences.jsonl`: complete commands for each CSV row, including targets and throw directions.',
       '- `rooms.json`: exact initial states for reproduction.',
       '- `summary.json`: coverage, budgets, action statistics, and counts of action-usage profiles.', '');
