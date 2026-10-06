@@ -406,7 +406,7 @@ test('a thrown enemy skips the current beat and two more, then tells before deal
   assert.ok(next.player.hp < 24);
 });
 
-test('throws stop at the perimeter without additional wall damage and require a free first cell', () => {
+test('throws stop at the perimeter without additional wall damage and cannot hit the player', () => {
   const state = fixture();
   Object.assign(state.player, { x: 7, y: 4 });
   const body = enemy(state, { x: 8, y: 4 });
@@ -421,8 +421,65 @@ test('throws stop at the perimeter without additional wall damage and require a 
   const occupied = fixture();
   const adjacent = enemy(occupied, { x: 6, y: 4 });
   enemy(occupied, { x: 7, y: 4 });
-  assert.equal(preview(occupied, { type: 'Throw', targetId: adjacent.id, direction: { x: 1, y: 0 } }).valid, false);
   assert.equal(preview(occupied, { type: 'Throw', targetId: adjacent.id, direction: { x: -1, y: 0 } }).valid, false, 'Cannot throw into the player');
+});
+
+test('throws collide with immediately adjacent enemies in all directions without requiring travel space', () => {
+  for (const direction of DIRS) {
+    for (const down of [0, 2]) {
+      const state = fixture();
+      const body = enemy(state, add(state.player, direction));
+      const victim = enemy(state, add(body, direction), 'lunger');
+      const beyond = enemy(state, add(victim, direction));
+      beyond.down = 1;
+      victim.down = down;
+      body.recovery = 1;
+      state.player.combo = { targetId: body.id, hits: 2 };
+      tell(body, [position(state.player)]);
+      tell(victim, [position(body), position(state.player)]);
+      const command: Command = { type: 'Throw', targetId: body.id, direction };
+      const original = structuredClone(state);
+      const predicted = preview(state, command);
+      assert.equal(predicted.valid, true);
+      assert.deepEqual(predicted.path, []);
+      assert.deepEqual(predicted.pushes, [{ enemyId: body.id, from: position(body), to: position(body) }]);
+      assert.deepEqual(predicted.hits, [{ enemyId: body.id, damage: 1 }, { enemyId: victim.id, damage: 1 }]);
+      assert.deepEqual(new Set(predicted.interrupted), new Set([body.id, victim.id]));
+      assert.deepEqual(new Set(predicted.knockdowns), new Set([body.id, victim.id]));
+      assert.equal(predicted.incomingDamage, 0);
+      assert.ok(legalCommands(state).some(value => JSON.stringify(value) === JSON.stringify(command)));
+      const next = apply(state, command);
+      for (const source of [body, victim]) {
+        const after = find(next, source.id);
+        assert.deepEqual(position(after), position(source));
+        assert.equal(after.hp, 11);
+        assert.equal(after.down, 2);
+        assert.equal(after.recovery, 0);
+        assert.equal(after.intent, null);
+      }
+      assert.equal(find(next, beyond.id).hp, 12, 'A collision does not chain through the crowd.');
+      assert.equal(next.player.hp, 24);
+      assert.equal(next.player.combo, null);
+      assert.equal(next.stats.brokenCombos, 1);
+      assert.deepEqual(state, original, 'Preview and resolution preserve the input state.');
+    }
+  }
+});
+
+test('immediate throw collisions can defeat either body while preserving non-overlapping positions', () => {
+  for (const damaged of ['body', 'victim', 'both'] as const) {
+    const state = fixture();
+    const body = enemy(state, { x: 6, y: 4 });
+    const victim = enemy(state, { x: 7, y: 4 });
+    enemy(state, { x: 9, y: 7 });
+    if (damaged !== 'victim') body.hp = 1;
+    if (damaged !== 'body') victim.hp = 1;
+    const next = apply(state, { type: 'Throw', targetId: body.id, direction: { x: 1, y: 0 } });
+    assert.equal(find(next, body.id).hp, damaged === 'victim' ? 11 : 0);
+    assert.equal(find(next, victim.id).hp, damaged === 'body' ? 11 : 0);
+    assert.equal(new Set(next.enemies.filter(value => value.hp > 0).map(key)).size,
+      next.enemies.filter(value => value.hp > 0).length);
+  }
 });
 
 test('vault crosses standing or downed enemies but cannot land on actors or outside the arena', () => {

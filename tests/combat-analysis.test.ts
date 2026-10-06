@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createEncounter } from '../src/engine';
-import { parseOptions, runAnalysis, verifyWin, finisherShare, comboVerdict } from '../scripts/analyze-combat';
+import { parseOptions, runAnalysis, verifyWin, finisherShare, comboVerdict, summarizeDistribution } from '../scripts/analyze-combat';
 import { type WinningSequence } from '../scripts/winning-search';
 
 test('analysis CLI rejects invalid or ambiguous budgets instead of silently changing the search', () => {
@@ -33,6 +33,8 @@ test('recorded wins must replay to victory with the claimed action counts and he
   };
   const original = structuredClone(state);
   assert.doesNotThrow(() => verifyWin(state, win));
+  assert.equal(verifyWin(state, win).firstComboBeat, null, 'Chip-only wins must not report an invented completion turn.');
+  assert.equal(verifyWin(state, win).firstComboAction, null);
   assert.deepEqual(state, original);
   assert.throws(() => verifyWin(state, { ...win, hp: 23 }));
   assert.throws(() => verifyWin(state, { ...win, beats: 2 }));
@@ -55,6 +57,51 @@ test('win verification distinguishes free opening moves from elapsed combat beat
   assert.throws(() => verifyWin(initial, { ...win, actions: { ...win.actions, Step: 0 } }));
 });
 
+test('first-combo timing records the completed third Strike and counts a free opening Step only as an action', () => {
+  for (const freeStep of [false, true]) {
+    const initial = createEncounter();
+    initial.enemies = [{ ...initial.enemies[0], x: 6, y: 4, hp: 24, maxHp: 24 }];
+    const strikes = Array.from({ length: 6 }, () => ({ type: 'Strike' as const, targetId: initial.enemies[0].id }));
+    const metrics = verifyWin(initial, {
+      commands: freeStep ? [{ type: 'Step', target: { x: 5, y: 5 } }, ...strikes] : strikes,
+      actionCount: freeStep ? 7 : 6, beats: 6, hp: 24,
+      actions: { Step: freeStep ? 1 : 0, Strike: 6, Throw: 0, Vault: 0, Wait: 0 },
+    });
+    assert.equal(metrics.completedCombos, 2);
+    assert.equal(metrics.firstComboBeat, 3, 'A later completed combo must not overwrite the first timing.');
+    assert.equal(metrics.firstComboAction, freeStep ? 4 : 3);
+  }
+});
+
+test('broken combo attempts do not count as completion, and timings are relative to the replay start', () => {
+  const initial = createEncounter();
+  initial.enemies = [{ ...initial.enemies[0], x: 6, y: 4, hp: 13, maxHp: 13 }];
+  initial.beat = 20;
+  initial.openingStepAvailable = false;
+  initial.stats.completedCombos = 7;
+  const strike = { type: 'Strike' as const, targetId: initial.enemies[0].id };
+  const metrics = verifyWin(initial, {
+    commands: [strike, { type: 'Wait' }, strike, strike, strike],
+    actionCount: 5, beats: 5, hp: 24, actions: { Step: 0, Strike: 4, Throw: 0, Vault: 0, Wait: 1 },
+  });
+  assert.equal(metrics.completedCombos, 1);
+  assert.equal(metrics.brokenCombos, 1);
+  assert.equal(metrics.firstComboBeat, 5);
+  assert.equal(metrics.firstComboAction, 5);
+});
+
+test('first-combo distributions use every recorded win and compute weighted odd and even medians', () => {
+  assert.equal(summarizeDistribution(new Map()), null);
+  assert.deepEqual(summarizeDistribution(new Map([[9, 1], [2, 2], [5, 1]])), {
+    count: 4, min: 2, median: 3.5, max: 9, mean: 4.5,
+    histogram: [{ value: 2, wins: 2 }, { value: 5, wins: 1 }, { value: 9, wins: 1 }],
+  });
+  assert.equal(summarizeDistribution(new Map([[2, 2], [7, 1], [9, 2]]))?.median, 7);
+  assert.deepEqual(summarizeDistribution(new Map([[3, 4]])), {
+    count: 4, min: 3, median: 3, max: 3, mean: 3, histogram: [{ value: 3, wins: 4 }],
+  });
+});
+
 test('combo qualification measures actual finisher damage rather than just the presence of a combo kill', () => {
   for (const hp of [3, 4, 12]) {
     const state = createEncounter();
@@ -68,6 +115,8 @@ test('combo qualification measures actual finisher damage rather than just the p
     assert.equal(metrics.finisherDamage, hp - 2, 'Overkill must not count as effective damage.');
     assert.equal(metrics.chipStrikeDamage, 2);
     assert.equal(metrics.chipStrikeActions, 2);
+    assert.equal(metrics.firstComboBeat, 3);
+    assert.equal(metrics.firstComboAction, 3);
     assert.equal(finisherShare(metrics) > 0.5, hp === 12);
   }
   const state = createEncounter();
@@ -80,6 +129,8 @@ test('combo qualification measures actual finisher damage rather than just the p
     actionCount: 1, beats: 1, hp: 24, actions: { Step: 0, Strike: 0, Throw: 1, Vault: 0, Wait: 0 },
   });
   assert.equal(chip.throwDamage, 2, 'Both bodies in a collision contribute actual damage.');
+  assert.equal(chip.firstComboBeat, null);
+  assert.equal(chip.firstComboAction, null);
   assert.equal(finisherShare(chip), 0);
   assert.equal(finisherShare({ ...chip, finisherDamage: 2 }), 0.5, 'Exactly half is not a majority.');
 });
@@ -97,13 +148,19 @@ test('analysis reports distinguish horizon exhaustion from incomplete searches a
     const base = { ...parseOptions([]), rooms: 1, seed: 0, maxBeats: 0, output: parent };
     const exhaustive = runAnalysis({ ...base, mode: 'exhaustive' });
     const summary = JSON.parse(readFileSync(join(exhaustive, 'summary.json'), 'utf8'));
+    assert.equal(summary.schemaVersion, 3);
     assert.equal(summary.rooms.length, 2);
     assert.ok(summary.rooms.every((room: { verdict: string; completed: boolean; wins: number }) =>
       room.verdict === 'no-win-within-horizon' && room.completed && room.wins === 0));
     const rooms = JSON.parse(readFileSync(join(exhaustive, 'rooms.json'), 'utf8'));
     assert.deepEqual(rooms[0].initial, createEncounter());
     assert.equal(rooms[1].seed, 0);
-    assert.match(readFileSync(join(exhaustive, 'wins.csv'), 'utf8'), /^room,win,actionCount,beats,hp,Step,Strike,Throw,Vault,Wait,.*finisherDamageShare,comboFocused\n$/);
+    assert.match(readFileSync(join(exhaustive, 'wins.csv'), 'utf8'), /^room,win,actionCount,beats,hp,Step,Strike,Throw,Vault,Wait,.*firstComboBeat,firstComboAction,finisherDamageShare,comboFocused\n$/);
+    for (const room of summary.rooms) assert.deepEqual(room.firstComboTiming, {
+      winsWithCombo: 0, winsWithoutCombo: 0, combatBeat: null, playerAction: null, combatBeatsBefore: null,
+    });
+    assert.match(readFileSync(join(exhaustive, 'report.md'), 'utf8'), /completed third Strike/);
+    assert.match(summary.firstComboTimingDefinition, /No-combo wins have null timings/);
     assert.equal(readFileSync(join(exhaustive, 'winning-sequences.jsonl'), 'utf8'), '');
     const sampled = runAnalysis({ ...base, mode: 'sampled', maxBeats: 1, maxTransitions: 1 });
     assert.notEqual(sampled, exhaustive, 'A second report must not overwrite the first.');

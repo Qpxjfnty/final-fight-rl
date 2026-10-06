@@ -77,8 +77,13 @@ export interface WinMetrics {
   completedCombos: number; brokenCombos: number; finisherKills: number;
   chipStrikeActions: number; chipStrikeDamage: number; finisherDamage: number;
   throwDamage: number; damageTaken: number;
+  /** Elapsed combat beat of the first completed third Strike; null for wins without a finisher. */
+  firstComboBeat: number | null;
+  /** One-based player action index of that third Strike, including any free opening Step. */
+  firstComboAction: number | null;
 }
-const METRICS: Array<keyof WinMetrics> = [
+type TotalMetric = Exclude<keyof WinMetrics, 'firstComboBeat' | 'firstComboAction'>;
+const METRICS: TotalMetric[] = [
   'completedCombos', 'brokenCombos', 'finisherKills', 'chipStrikeActions',
   'chipStrikeDamage', 'finisherDamage', 'throwDamage', 'damageTaken',
 ];
@@ -88,11 +93,17 @@ export const allowsNoFinisher = (state: State, command: Command): boolean =>
 /** Verify every witness and measure actual HP removed, including overkill clipping. */
 export function verifyWin(initial: State, win: WinningSequence): WinMetrics {
   let state = initial;
-  const metrics = Object.fromEntries(METRICS.map(metric => [metric, 0])) as unknown as WinMetrics;
+  const metrics = {
+    ...Object.fromEntries(METRICS.map(metric => [metric, 0])), firstComboBeat: null, firstComboAction: null,
+  } as unknown as WinMetrics;
   const counts = Object.fromEntries(ACTIONS.map(action => [action, 0])) as Record<Action, number>;
-  for (const command of win.commands) {
+  for (const [index, command] of win.commands.entries()) {
     const result = step(state, command);
     if (!result.accepted) throw new Error(`Winning sequence contains an invalid action: ${result.reason}`);
+    if (metrics.firstComboBeat === null && result.state.stats.completedCombos > state.stats.completedCombos) {
+      metrics.firstComboBeat = result.state.beat - initial.beat;
+      metrics.firstComboAction = index + 1;
+    }
     const removed = state.enemies.reduce((sum, enemy) =>
       sum + enemy.hp - (result.state.enemies.find(after => after.id === enemy.id)?.hp ?? 0), 0);
     if (command.type === 'Strike') {
@@ -114,6 +125,32 @@ export function verifyWin(initial: State, win: WinningSequence): WinMetrics {
   metrics.finisherKills = state.stats.finisherKills - initial.stats.finisherKills;
   metrics.damageTaken = state.stats.damageTaken - initial.stats.damageTaken;
   return metrics;
+}
+
+export interface Distribution {
+  count: number; min: number; median: number; max: number; mean: number;
+  histogram: Array<{ value: number; wins: number }>;
+}
+
+/** Weighted distribution over recorded wins, with no need to retain every winning path in memory. */
+export function summarizeDistribution(counts: Map<number, number>): Distribution | null {
+  const histogram = [...counts].sort(([left], [right]) => left - right)
+    .map(([value, wins]) => ({ value, wins }));
+  const count = histogram.reduce((sum, item) => sum + item.wins, 0);
+  if (count === 0) return null;
+  const lowerIndex = Math.floor((count - 1) / 2), upperIndex = Math.floor(count / 2);
+  let visited = 0, lower = 0, upper = 0;
+  for (const { value, wins } of histogram) {
+    if (visited <= lowerIndex && visited + wins > lowerIndex) lower = value;
+    if (visited <= upperIndex && visited + wins > upperIndex) upper = value;
+    visited += wins;
+  }
+  return {
+    count, min: histogram[0].value, median: (lower + upper) / 2,
+    max: histogram[histogram.length - 1].value,
+    mean: histogram.reduce((sum, item) => sum + item.value * item.wins, 0) / count,
+    histogram,
+  };
 }
 
 export function finisherShare(metrics: WinMetrics): number {
@@ -142,27 +179,34 @@ export function runAnalysis(options: AnalysisOptions): string {
     '# Combat action-usage analysis', '',
     `Mode: **${options.mode}**, objective: **${options.objective}**. Horizon: **${options.maxBeats} actions**. Budget: **${options.maxTransitions} simulated actions per room**.`, '',
     'A free opening Step counts as one action and zero combat beats. The horizon includes every player action. The legacy maxBeats option names this action limit.', '',
+    'First-combo timing records the completed third Strike, not the first hit of an attempt. Combat beat and player action indices are measured from the room start; they are one-based. Turns before that combo equal its combat beat minus one. Wins without a completed combo have null timings and are excluded from timing distributions.', '',
     'A recorded win is replay-verified. Sampled results are biased toward the search heuristic; action frequencies are not player usage rates or proof that an action is necessary.', '',
     'Only a completed exhaustive search covers every allowed legal winning sequence within its horizon. Partial searches cannot establish that a room is unwinnable. Loops remain distinct sequences and are bounded by the action limit.', '',
     '**Room pass criterion:** at least one replayed winning sequence gets **more than 50% of actual enemy HP removed from combo finishers**. Chip-damage wins are allowed and do not fail a room. Missing such a witness in a partial search means review is needed, not that only chip strategies can win.', '',
     'The combo objective deliberately searches for qualifying witnesses. Use balanced to explore alternate strategies; neither sampled mode estimates the frequency of all possible wins.', '',
   ];
   try {
-    writeSync(csv, ['room', 'win', 'actionCount', 'beats', 'hp', ...ACTIONS, ...METRICS, 'finisherDamageShare', 'comboFocused'].join(',') + '\n');
+    writeSync(csv, ['room', 'win', 'actionCount', 'beats', 'hp', ...ACTIONS, ...METRICS,
+      'firstComboBeat', 'firstComboAction', 'finisherDamageShare', 'comboFocused'].join(',') + '\n');
     writeFileSync(join(directory, 'rooms.json'), JSON.stringify(rooms, null, 2) + '\n');
     for (const room of rooms) {
       let recorded = 0;
       let minActions = Infinity, maxActions = 0, minBeats = Infinity, maxBeats = 0, minHp = Infinity, maxHp = 0;
       const profiles = new Map<string, number>();
       let winsWithoutFinishers = 0, qualifyingWins = 0, finisherShareTotal = 0, minFinisherShare = Infinity, maxFinisherShare = 0;
+      const firstComboBeats = new Map<number, number>(), firstComboActions = new Map<number, number>();
       let witness: (WinningSequence & { metrics: WinMetrics; finisherDamageShare: number }) | null = null;
       const tactics = Object.fromEntries(METRICS.map(metric => [metric, { min: Infinity, max: 0, total: 0 }])) as
-        Record<keyof WinMetrics, { min: number; max: number; total: number }>;
+        Record<TotalMetric, { min: number; max: number; total: number }>;
       const result = searchWins(room.initial, {
         ...options,
         onWin(win) {
           const metrics = verifyWin(room.initial, win);
           if (metrics.completedCombos === 0) winsWithoutFinishers += 1;
+          if (metrics.firstComboBeat !== null && metrics.firstComboAction !== null) {
+            firstComboBeats.set(metrics.firstComboBeat, (firstComboBeats.get(metrics.firstComboBeat) ?? 0) + 1);
+            firstComboActions.set(metrics.firstComboAction, (firstComboActions.get(metrics.firstComboAction) ?? 0) + 1);
+          }
           const share = finisherShare(metrics);
           const comboFocused = share > 0.5;
           if (comboFocused) {
@@ -185,16 +229,22 @@ export function runAnalysis(options: AnalysisOptions): string {
           const profile = ACTIONS.map(action => win.actions[action]).join(',');
           profiles.set(profile, (profiles.get(profile) ?? 0) + 1);
           writeSync(csv, [room.id, recorded, win.actionCount, win.beats, win.hp, ...ACTIONS.map(action => win.actions[action]),
-            ...METRICS.map(metric => metrics[metric]), share, comboFocused].join(',') + '\n');
+            ...METRICS.map(metric => metrics[metric]), metrics.firstComboBeat, metrics.firstComboAction, share, comboFocused].join(',') + '\n');
           writeSync(jsonl, JSON.stringify({ room: room.id, win: recorded, ...win, metrics, finisherDamageShare: share, comboFocused }) + '\n');
         },
       });
       if (recorded !== result.wins) throw new Error('Recorded win count differs from search result.');
       const verdict = result.wins ? 'winnable' : result.completed ? 'no-win-within-horizon' : 'inconclusive';
       const roomCheck = comboVerdict(qualifyingWins, result.wins, result.completed);
+      const firstComboTiming = {
+        winsWithCombo: recorded - winsWithoutFinishers, winsWithoutCombo: winsWithoutFinishers,
+        combatBeat: summarizeDistribution(firstComboBeats), playerAction: summarizeDistribution(firstComboActions),
+        combatBeatsBefore: summarizeDistribution(new Map([...firstComboBeats].map(([beat, wins]) => [beat - 1, wins]))),
+      };
       const report = {
         room: room.id, seed: room.seed, verdict, roomCheck, ...result,
         qualifyingWins, comboWitness: witness, winsWithoutFinishers, tactics: recorded ? tactics : null,
+        firstComboTiming,
         finisherDamageShare: recorded ? { min: minFinisherShare, max: maxFinisherShare, mean: finisherShareTotal / recorded } : null,
         actionCount: recorded ? { min: minActions, max: maxActions } : null,
         beats: recorded ? { min: minBeats, max: maxBeats } : null,
@@ -209,8 +259,23 @@ export function runAnalysis(options: AnalysisOptions): string {
         `**${roomCheck}** · ${qualifyingWins} combo-focused wins out of ${recorded} verified winning sequences · ${result.transitions} simulated actions · ${result.completed ? 'complete within horizon' : 'partial search'} (${result.stopReason}).`, '');
       if (recorded) {
         markdown.push(`Wins take ${minActions}–${maxActions} player actions across ${minBeats}–${maxBeats} combat beats and finish with ${minHp}–${maxHp} HP.`, '',
-          `${winsWithoutFinishers} wins use no combo finishers (allowed). Finisher damage share: minimum ${(minFinisherShare * 100).toFixed(1)}%, mean ${(finisherShareTotal / recorded * 100).toFixed(1)}%, maximum ${(maxFinisherShare * 100).toFixed(1)}%. Damage counts actual enemy HP removed, excluding overkill.`, '',
-          '| Combat metric | Minimum | Mean | Maximum |', '| --- | ---: | ---: | ---: |');
+          `${winsWithoutFinishers} wins use no combo finishers (allowed). Finisher damage share: minimum ${(minFinisherShare * 100).toFixed(1)}%, mean ${(finisherShareTotal / recorded * 100).toFixed(1)}%, maximum ${(maxFinisherShare * 100).toFixed(1)}%. Damage counts actual enemy HP removed, excluding overkill.`, '');
+        if (firstComboTiming.combatBeat && firstComboTiming.playerAction && firstComboTiming.combatBeatsBefore) {
+          markdown.push(`First completed combo across ${firstComboTiming.winsWithCombo} wins:`, '',
+            '| Timing | Minimum | Median | Mean | Maximum |', '| --- | ---: | ---: | ---: | ---: |');
+          for (const [label, distribution] of [
+            ['Completion combat turn', firstComboTiming.combatBeat],
+            ['Completion player action', firstComboTiming.playerAction],
+            ['Combat turns before completion', firstComboTiming.combatBeatsBefore],
+          ] as const) {
+            markdown.push(`| ${label} | ${distribution.min} | ${distribution.median} | ${distribution.mean.toFixed(2)} | ${distribution.max} |`);
+          }
+          markdown.push('', `${winsWithoutFinishers} wins without a completed combo are excluded. Completion is the third Strike; the free opening Step counts only toward the player action index.`, '',
+            '| First-combo combat turn | Recorded wins |', '| --- | ---: |');
+          for (const { value, wins } of firstComboTiming.combatBeat.histogram) markdown.push(`| ${value} | ${wins} |`);
+          markdown.push('');
+        } else markdown.push('No recorded win completes a combo, so first-combo timing is unavailable.', '');
+        markdown.push('| Combat metric | Minimum | Mean | Maximum |', '| --- | ---: | ---: | ---: |');
         for (const metric of METRICS) {
           const summary = tactics[metric];
           markdown.push(`| ${metric} | ${summary.min} | ${(summary.total / recorded).toFixed(2)} | ${summary.max} |`);
@@ -225,14 +290,15 @@ export function runAnalysis(options: AnalysisOptions): string {
       }
     }
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({
-      schemaVersion: 2, options, comboCriterion: { metric: 'effectiveFinisherDamageShare', operator: '>', threshold: 0.5 },
+      schemaVersion: 3, options, comboCriterion: { metric: 'effectiveFinisherDamageShare', operator: '>', threshold: 0.5 },
+      firstComboTimingDefinition: 'First completed third Strike: firstComboBeat is its elapsed combat turn; firstComboAction is its one-based player action index, including a free opening Step. Combat turns before completion = firstComboBeat - 1. No-combo wins have null timings and are excluded from timing distributions.',
       note: 'Pass requires one qualifying witness; chip wins are allowed. Completeness is bounded by maxBeats player actions, including a free opening Step. Sampled searches are biased and never exhaustive.', rooms: reports,
     }, null, 2) + '\n');
     markdown.push('## Files', '',
-      '- `wins.csv`: one row per discovered win, with total player actions, elapsed combat beats, and all five action counts.',
+      '- `wins.csv`: one row per discovered win, with total player actions, elapsed combat beats, all five action counts, and firstComboBeat / firstComboAction (blank for no-combo wins).',
       '- `winning-sequences.jsonl`: complete commands for each CSV row, including targets and throw directions.',
       '- `rooms.json`: exact initial states for reproduction.',
-      '- `summary.json`: coverage, budgets, action statistics, and counts of action-usage profiles.', '');
+      '- `summary.json`: coverage, budgets, action statistics, first-combo timing distributions / histograms, and counts of action-usage profiles.', '');
     writeFileSync(join(directory, 'report.md'), markdown.join('\n'));
   } finally {
     closeSync(csv); closeSync(jsonl);

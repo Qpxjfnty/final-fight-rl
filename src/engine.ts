@@ -41,8 +41,11 @@ function throwPath(state: State, enemy: Enemy, direction: Pos): ThrowPath | null
     if (other) { collision = other; break; }
     path.push(cell);
   }
-  // An immediately adjacent obstacle leaves no legal landing cell.
-  return path.length ? { landing: path[path.length - 1], path, collision } : null;
+  // An adjacent body can absorb a throw even when there is no travel space.
+  // Stop before it, keeping both actors in distinct cells.
+  return path.length || collision
+    ? { landing: path.at(-1) ?? position(enemy), path, collision }
+    : null;
 }
 
 function validationError(state: State, command: Command): string | null {
@@ -60,7 +63,7 @@ function validationError(state: State, command: Command): string | null {
   if (distance(state.player, target) !== 1) return 'Choose an adjacent enemy.';
   if (command.type === 'Strike') return null;
   if (command.type === 'Throw') {
-    return throwPath(state, target, command.direction) ? null : 'There is no empty landing cell in that direction.';
+    return throwPath(state, target, command.direction) ? null : 'There is no room to throw or enemy to collide with in that direction.';
   }
   if (state.player.vaultCooldown > 0) return `Vault needs ${state.player.vaultCooldown} more action${state.player.vaultCooldown === 1 ? '' : 's'}.`;
   const destination = add(target, { x: target.x - state.player.x, y: target.y - state.player.y });
@@ -189,7 +192,9 @@ function simulate(original: State, command: Command): Simulation {
       details.path = trajectory.path.map(position);
       details.pushes.push({ enemyId: target.id, from: position(target), to: position(trajectory.landing) });
       Object.assign(target, trajectory.landing);
-      events.push(`Throw enemy ${target.id} to ${target.x},${target.y}.`);
+      events.push(trajectory.path.length
+        ? `Throw enemy ${target.id} to ${target.x},${target.y}.`
+        : `Throw enemy ${target.id} into adjacent enemy ${trajectory.collision!.id}; neither changes cells.`);
       for (const enemy of [target, ...(trajectory.collision ? [trajectory.collision] : [])]) {
         suppress(enemy);
         enemy.down = CONFIG.knockdownBeats;
