@@ -40,10 +40,40 @@ Open the address printed by Vite, normally `http://127.0.0.1:5173/`. On macOS, *
 ```sh
 npm run check       # Combat tests, TypeScript checks, and production build
 npm run simulate    # Bounded tactical-search feasibility probe
+npm run analyze     # Generate analysis rooms and record winning action sequences
 npm run preview     # Serve the built dist/ locally
 ```
 
 The combat tests cover timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
+
+## Combo viability and winning-sequence analysis
+
+The playable demo currently uses one fixed encounter. `npm run simulate` searches for one winning line; it does not prove that every possible room is winnable. The separate analysis tool tests that encounter plus reproducible generated enemy placements, keeping the same arena, health, enemy mix, and combat rules. A room **passes** when at least one replayed win gets **more than 50% of actual enemy HP removed from combo finishers**. Chip-damage wins are allowed; the concern is a room that lacks a viable combo-focused route.
+
+```sh
+npm run analyze
+npm run analyze -- --rooms 8 --seed 42 --max-beats 40 --beam-width 128
+npm run analyze -- --objective balanced --rooms 0 --max-beats 96 --max-transitions 150000
+npm run analyze -- --mode exhaustive --rooms 0 --max-beats 4 --max-transitions 100000
+npm run analyze -- --help
+```
+
+The default searches the fixed demo plus four generated rooms, using seeds 1–4, a 32-action horizon, a beam width of 96, and a budget of 75,000 simulated actions per room. Each generated room starts with six enemies surrounding the player, at distances of two to three cells. This generator belongs to the analysis tooling; it does not replace the live demo's layout.
+
+Each run creates a new directory under `work/qa/combat-analysis/` with:
+
+- `wins.csv`: one row per discovered win, with room, win number, beats, remaining HP, separate **Step / Strike / Throw / Vault / Wait** counts, completed/broken combos, finisher kills, and effective damage from finishers, ordinary strikes, and throws. It also records the finisher damage share and whether the win qualifies.
+- `winning-sequences.jsonl`: the full command sequence for every CSV row, including targets and throw directions. Every win is replayed through the game engine before recording.
+- `rooms.json`: exact initial states for reproduction.
+- `report.md` and `summary.json`: each room's combo viability result, a qualifying witness when found, coverage, search limits, action-count ranges and averages, damage statistics, and action-usage profiles.
+
+**Exhaustive mode** explores every legal sequence up to the action limit, including distinct paths that reach the same state. It stops a sequence when the fight ends. Completion is reported only if the whole bounded search finishes before its transition budget. With movement and waiting, sequences can loop; enumerating all lengths is not a finite practical test. Even a finite horizon grows rapidly with each added turn.
+
+**Sampled mode** keeps promising paths at each depth and continues looking after the first win. Its default `combo` objective deliberately favors combo opportunities to find a qualifying witness. The optional `balanced` objective prioritizes damage, kills, and survival without bonuses for combo progress or finisher kills. Both are deterministic, heuristic samples, never exhaustive censuses. Action frequencies describe the found sequences, not human behavior, action necessity, or the distribution of all possible wins. The objective does not affect exhaustive enumeration.
+
+A qualifying replayed win establishes **pass** for that room, even when other sequences win entirely through chip damage. Only nonqualifying wins in a partial search means **needs review**; no wins means **inconclusive**. A completed exhaustive search without a qualifying win means **no combo win within the chosen horizon**, not impossibility at every length. Damage uses actual HP removed, so a 10-damage finisher against 1 HP contributes only 1. These checks do not establish that every possible generated room supports combos; a future runtime generator should retain a verified qualifying witness or retry unresolved rooms.
+
+The command exits with code 2 if any tested room lacks a qualifying witness, after saving its report. This is a review gate, not a claim of impossibility. GitHub's workflow runs the default demo plus seeds 1–4 on each push and pull request and saves the results in its `combat-analysis` artifact. An unresolved room stops deployment until investigated.
 
 ## Project structure
 
@@ -57,6 +87,6 @@ This repository contains only the combat prototype. The earlier game is preserve
 
 ## Publishing
 
-GitHub Pages uses the **Check and deploy demo** workflow. Every push to `main` runs `npm ci`, tests, TypeScript checks, and a build, then publishes only `dist/`. Pull requests run the checks without deploying. A failed build leaves the previous demo in place. The workflow can also be run manually from Actions.
+GitHub Pages uses the **Check and deploy demo** workflow. Every push to `main` runs `npm ci`, tests, TypeScript checks, a build, and combo-viability analysis, then publishes only `dist/`. Pull requests run the checks without deploying. Failed checks leave the previous demo in place. The workflow can also be run manually from Actions.
 
 Assets use relative URLs so the build works at the repository's Pages path as well as locally. For a fork, enable **Settings → Pages → Source: GitHub Actions** and update the demo link above. No repository secrets or backend services are required.

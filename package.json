@@ -11,7 +11,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "tsx --test tests/*.test.ts",
     "check": "npm run test && npm run build",
-    "simulate": "tsx scripts/playthrough.ts"
+    "simulate": "tsx scripts/playthrough.ts",
+    "analyze": "tsx scripts/analyze-combat.ts"
   },
   "devDependencies": {
     "typescript": "~5.9.3",

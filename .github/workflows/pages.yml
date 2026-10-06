@@ -27,6 +27,15 @@ jobs:
         run: npm ci
       - name: Test and build
         run: npm run check
+      - name: Check combo viability in the demo and generated rooms
+        run: npm run analyze
+      - name: Upload combat analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combat-analysis
+          path: work/qa/combat-analysis/
+          if-no-files-found: ignore
       - name: Upload demo
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
