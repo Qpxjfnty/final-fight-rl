@@ -22,7 +22,7 @@ function canWalk(state: State, from: Pos, to: Pos, ignoredId?: number): boolean 
 
 function emptyPreview(): Preview {
   return {
-    valid: false, reason: '', comboStage: 0, hits: [], pushes: [], destination: null,
+    valid: false, reason: '', comboStage: 0, hits: [], pushes: [], lunges: [], destination: null,
     path: [], knockdowns: [], interrupted: [], cancelled: [], threats: [], incomingDamage: 0,
   };
 }
@@ -67,21 +67,17 @@ function validationError(state: State, command: Command): string | null {
   return free(state, destination) ? null : 'The cell beyond that enemy must be empty and inside the arena.';
 }
 
-/** The committed ray must still reach the player; targets never follow a dodge. */
-function reachableLunge(state: State, enemy: Enemy, intent: Intent): Pos[] | null {
-  if (!intent.cells.some(cell => equal(cell, state.player))) return null;
-  const dx = state.player.x - enemy.x;
-  const dy = state.player.y - enemy.y;
-  const range = distance(enemy, state.player);
-  if (range < 1 || range > CONFIG.lungeRange || (dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy))) return null;
-  const direction = { x: Math.sign(dx), y: Math.sign(dy) };
-  const path: Pos[] = [];
-  for (let n = 1; n <= range; n += 1) {
-    const cell = add(enemy, direction, n);
-    if (!inside(cell) || !intent.cells.some(committed => equal(committed, cell)) || enemyAt(state, cell, enemy.id)) return null;
-    path.push(cell);
+/** Follow the committed ray even after a dodge, stopping before a body or target. */
+function resolveLunge(state: State, enemy: Enemy, intent: Intent): { landing: Pos; canHit: boolean } {
+  let landing = position(enemy);
+  for (let index = 0; index < intent.cells.length; index += 1) {
+    const cell = intent.cells[index];
+    if (!inside(cell) || enemyAt(state, cell, enemy.id)) break;
+    if (equal(cell, state.player)) return { landing, canHit: true };
+    // The last cell is the attack target, not a movement destination.
+    if (index < intent.cells.length - 1) landing = position(cell);
   }
-  return path;
+  return { landing, canHit: false };
 }
 
 function makeIntent(state: State, enemy: Enemy, from: Pos = enemy): Intent | null {
@@ -219,19 +215,23 @@ function simulate(original: State, command: Command): Simulation {
     if (!intent) continue;
     spentTurn.add(enemy.id);
     enemy.intent = null;
-    const lungePath = intent.kind === 'lunge' ? reachableLunge(state, enemy, intent) : null;
+    const lunge = intent.kind === 'lunge' ? resolveLunge(state, enemy, intent) : null;
     const canHit = intent.kind === 'lunge'
-      ? lungePath !== null
+      ? lunge!.canHit
       : distance(enemy, state.player) === 1 && intent.cells.some(cell => equal(cell, state.player));
+    if (lunge && !equal(enemy, lunge.landing)) {
+      details.lunges.push({ enemyId: enemy.id, from: position(enemy), to: position(lunge.landing) });
+      Object.assign(enemy, lunge.landing);
+      events.push(`Enemy ${enemy.id} lunges to ${enemy.x},${enemy.y}.`);
+    }
     if (!canHit) {
       details.cancelled.push(enemy.id);
       state.stats.cancelledAttacks += 1;
-      events.push(`Enemy ${enemy.id} cancels: no reachable target. It skips this beat without recovery.`);
+      events.push(`Enemy ${enemy.id} cancels its attack: no reachable target. Its turn ends without recovery.`);
       continue;
     }
     details.threats.push({ enemyId: enemy.id, cells: intent.cells.map(position), damage: intent.damage });
     details.incomingDamage += intent.damage;
-    if (lungePath && lungePath.length > 1) Object.assign(enemy, lungePath[lungePath.length - 2]);
     breakCombo(state, events);
     const damage = Math.min(state.player.hp, intent.damage);
     state.player.hp -= damage;

@@ -16,9 +16,9 @@ Six enemies surround you in a 9×7 arena. You have 24 HP; each enemy has 12 HP. 
 - **Step:** move to an adjacent empty cell in any of eight directions. You cannot cut diagonally through occupied corners.
 - **Wait:** spend one beat in place.
 
-Brawlers threaten adjacent cells; lungers threaten straight paths from farther away. Red cells show attacks committed for the next beat. If you leave an attack's committed cells, the enemy **cancels and skips that turn without recovery**. It does not move, retarget, or prepare another attack that turn. Lungers also cancel when a body blocks their path. An attack that fires requires a recovery beat.
+Brawlers threaten adjacent cells; lungers threaten straight paths from farther away. Red cells show attacks committed for the next beat. If you dodge a brawler's committed attack, it **cancels and stays put without recovery**. A lunger still advances along its committed path to its original landing cell—the cell before its original target—even if you dodge. Bodies stop its advance early. If it cannot hit you, it has **no recovery**. Neither enemy retargets or prepares another attack that turn; both can act on the following beat. An attack that hits requires a recovery beat.
 
-The forecast shows movement, damage, interrupts, knockdowns, cancelled attacks, and incoming damage before you confirm. Clear the arena to win; defeat or victory offers a restart of the same encounter. Balance remains provisional.
+The forecast shows player movement, throws, lunger landing cells, damage, interrupts, knockdowns, missed or cancelled attacks, and incoming damage before you confirm. Clear the arena to win; defeat or victory offers a restart of the same encounter. Balance remains provisional.
 
 ## Controls
 
@@ -43,7 +43,7 @@ npm run simulate    # Bounded tactical-search feasibility probe
 npm run preview     # Serve the built dist/ locally
 ```
 
-The 25 combat tests cover timing, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation writes ignored evidence to `work/qa/combat-lab/`. Its current winning line uses 30 beats, ends at 17 HP, and finishes all six enemies with combos. It checks feasibility, not human difficulty or enjoyment.
+The combat tests cover timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
 
 ## Project structure
 

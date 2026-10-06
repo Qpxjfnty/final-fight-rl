@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEncounter, legalCommands, preview, step } from '../src/engine';
-import { CONFIG, DIRS, equal, inside, key, type Command, type Enemy, type EnemyKind, type Pos, type State } from '../src/model';
+import { CONFIG, DIRS, add, equal, inside, key, type Command, type Enemy, type EnemyKind, type Pos, type State } from '../src/model';
 
 function fixture(): State {
   const state = createEncounter();
@@ -63,7 +63,7 @@ test('combat lab starts a repeatable surrounding encounter in a 9 by 7 interior'
 });
 
 for (const kind of ['brawler', 'lunger'] as const) {
-  test(`${kind} cancels a deserted tell, spends the beat idle, and can act next beat`, () => {
+  test(`${kind} cancels a deserted attack, completes any committed movement, and can act next beat`, () => {
     const state = fixture();
     const attacker = enemy(state, kind === 'brawler' ? { x: 4, y: 4 } : { x: 2, y: 4 }, kind);
     tell(attacker, kind === 'brawler' ? [{ x: 5, y: 4 }] : [{ x: 3, y: 4 }, { x: 4, y: 4 }, { x: 5, y: 4 }]);
@@ -73,7 +73,9 @@ for (const kind of ['brawler', 'lunger'] as const) {
     assert.equal(predicted.incomingDamage, 0);
     const next = apply(state, command);
     const cancelled = find(next, attacker.id);
-    assert.deepEqual(position(cancelled), position(attacker));
+    assert.deepEqual(position(cancelled), kind === 'lunger' ? { x: 4, y: 4 } : position(attacker));
+    assert.deepEqual(predicted.lunges, kind === 'lunger'
+      ? [{ enemyId: attacker.id, from: position(attacker), to: { x: 4, y: 4 } }] : []);
     assert.equal(cancelled.intent, null, 'Cancellation must not create another tell on the same beat');
     assert.equal(cancelled.recovery, 0, 'Cancelling an attack is not firing an attack');
     assert.equal(next.player.hp, 24);
@@ -90,7 +92,7 @@ for (const kind of ['brawler', 'lunger'] as const) {
     const next = apply(state, { type: 'Vault', targetId: crossed.id });
     assert.deepEqual(position(next.player), { x: 5, y: 2 });
     assert.equal(next.player.hp, 24);
-    assert.deepEqual(position(find(next, attacker.id)), position(attacker));
+    assert.deepEqual(position(find(next, attacker.id)), kind === 'lunger' ? { x: 4, y: 4 } : position(attacker));
     assert.equal(find(next, attacker.id).intent, null);
     assert.equal(find(next, attacker.id).recovery, 0);
   });
@@ -127,7 +129,72 @@ test('throwing a body across a committed lunge cancels it without recovery or re
   assert.equal(find(next, collision.id).hp, 11);
   assert.equal(find(next, attacker.id).intent, null);
   assert.equal(find(next, attacker.id).recovery, 0);
-  assert.deepEqual(position(find(next, attacker.id)), { x: 2, y: 4 });
+  assert.deepEqual(position(find(next, attacker.id)), { x: 3, y: 4 });
+  assert.deepEqual(predicted.lunges, [{ enemyId: attacker.id, from: { x: 2, y: 4 }, to: { x: 3, y: 4 } }]);
+  assert.equal(next.player.hp, 24);
+});
+
+test('dodged lunges keep their original landing for every direction and range', () => {
+  for (const direction of DIRS) for (let range = 1; range <= CONFIG.lungeRange; range++) {
+    const state = fixture();
+    const attacker = enemy(state, add(state.player, direction, -range), 'lunger');
+    tell(attacker, Array.from({ length: range }, (_, index) => add(attacker, direction, index + 1)));
+    const command: Command = { type: 'Step', target: add(state.player, { x: -direction.y, y: direction.x }) };
+    const predicted = preview(state, command);
+    const original = structuredClone(state);
+    const next = apply(state, command);
+    assert.deepEqual(state, original);
+    assert.deepEqual(position(find(next, attacker.id)), add(state.player, direction, -1));
+    assert.equal(find(next, attacker.id).intent, null);
+    assert.equal(find(next, attacker.id).recovery, 0);
+    assert.equal(next.player.hp, 24);
+    assert.equal(predicted.incomingDamage, 0);
+    assert.deepEqual(predicted.cancelled, [attacker.id]);
+    assert.equal(predicted.lunges.length, range === 1 ? 0 : 1);
+  }
+});
+
+test('an immediately blocking body prevents lunge movement without causing recovery', () => {
+  const state = fixture();
+  const attacker = enemy(state, { x: 2, y: 4 }, 'lunger');
+  const blocker = enemy(state, { x: 3, y: 4 });
+  blocker.down = 2;
+  tell(attacker, [{ x: 3, y: 4 }, { x: 4, y: 4 }, { x: 5, y: 4 }]);
+  const command: Command = { type: 'Step', target: { x: 5, y: 5 } };
+  assert.deepEqual(preview(state, command).lunges, []);
+  const next = apply(state, command);
+  assert.deepEqual(position(find(next, attacker.id)), position(attacker));
+  assert.equal(find(next, attacker.id).intent, null);
+  assert.equal(find(next, attacker.id).recovery, 0);
+  assert.equal(next.player.hp, 24);
+});
+
+test('moving closer along a committed lunge still gets hit and stops the lunger before the player', () => {
+  const state = fixture();
+  const attacker = enemy(state, { x: 2, y: 4 }, 'lunger');
+  tell(attacker, [{ x: 3, y: 4 }, { x: 4, y: 4 }, { x: 5, y: 4 }]);
+  const command: Command = { type: 'Step', target: { x: 4, y: 4 } };
+  const predicted = preview(state, command);
+  assert.equal(predicted.incomingDamage, 4);
+  assert.deepEqual(predicted.cancelled, []);
+  assert.deepEqual(predicted.lunges, [{ enemyId: attacker.id, from: position(attacker), to: { x: 3, y: 4 } }]);
+  const next = apply(state, command);
+  assert.deepEqual(position(find(next, attacker.id)), { x: 3, y: 4 });
+  assert.equal(find(next, attacker.id).recovery, 1);
+  assert.equal(next.player.hp, 20);
+});
+
+test('interrupting a lunger cancels its committed movement as well as damage', () => {
+  const state = fixture();
+  const attacker = enemy(state, { x: 4, y: 4 }, 'lunger');
+  tell(attacker, [{ x: 5, y: 4 }]);
+  const command: Command = { type: 'Throw', targetId: attacker.id, direction: { x: 0, y: -1 } };
+  const predicted = preview(state, command);
+  assert.deepEqual(predicted.lunges, []);
+  assert.deepEqual(predicted.interrupted, [attacker.id]);
+  const next = apply(state, command);
+  assert.deepEqual(position(find(next, attacker.id)), { x: 4, y: 1 });
+  assert.equal(find(next, attacker.id).intent, null);
   assert.equal(next.player.hp, 24);
 });
 
@@ -439,6 +506,9 @@ test('bounded fights stay deterministic, preserve inputs, and agree with every s
       for (const pushed of predicted.pushes) {
         const remaining = next.enemies.find(e => e.id === pushed.enemyId);
         if (remaining) assert.deepEqual(position(remaining), pushed.to);
+      }
+      for (const lunge of predicted.lunges) {
+        assert.deepEqual(position(find(next, lunge.enemyId)), lunge.to);
       }
       const actors = [next.player, ...next.enemies.filter(e => e.hp > 0)];
       assert.ok(actors.every(inside));

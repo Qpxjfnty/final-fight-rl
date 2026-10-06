@@ -29,6 +29,7 @@ export interface Preview {
   valid: boolean; reason: string; comboStage: 0 | 1 | 2 | 3;
   hits: { enemyId: number; damage: number }[];
   pushes: { enemyId: number; from: Pos; to: Pos }[];
+  lunges: { enemyId: number; from: Pos; to: Pos }[];
   destination: Pos | null; path: Pos[]; knockdowns: number[];
   interrupted: number[]; cancelled: number[]; threats: Threat[]; incomingDamage: number;
 }
