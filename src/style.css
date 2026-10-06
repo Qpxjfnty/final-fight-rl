@@ -9,6 +9,7 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
   --lab-teal: #70e7ce;
   --lab-gold: #f3c976;
   --lab-red: #ff7b7e;
+  --lab-grab: #ffab83;
   min-height: 100dvh;
   background: radial-gradient(ellipse at 28% 0, #15283a 0, transparent 48%), var(--lab-bg);
   color: var(--lab-text);
@@ -39,6 +40,9 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
 .combat-lab .lab-health { padding-right: 25px; }
 .combat-lab .lab-health i { display: block; position: absolute; width: calc(100% - 25px); height: 3px; background: #28403f; bottom: -6px; }
 .combat-lab .lab-health i::after { content: ''; display: block; width: var(--health); height: 100%; background: var(--lab-teal); }
+.combat-lab .lab-grab-status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 18px; margin-top: 12px; padding: 9px 12px; border-left: 3px solid var(--lab-grab); background: #3b2724; font-size: 11px; }
+.combat-lab .lab-grab-status strong { color: var(--lab-grab); font-size: 11px; letter-spacing: .035em; }
+.combat-lab .lab-grab-status span { color: #ead3c7; }
 .combat-lab .lab-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 30px; margin-top: 18px; align-items: start; }
 .combat-lab .lab-arena-heading { display: flex; justify-content: space-between; align-items: center; min-height: 44px; margin-bottom: 9px; gap: 12px; }
 .combat-lab .lab-arena-heading p { color: var(--lab-muted); font-size: 12px; }
@@ -56,8 +60,13 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
 .combat-lab .lab-player .lab-cell-glyph, .combat-lab .lab-player-letter { color: var(--lab-teal); }
 .combat-lab .lab-enemy .lab-cell-glyph { color: var(--lab-gold); }
 .combat-lab .lab-enemy.lunger .lab-cell-glyph, .combat-lab .lab-lunger-letter, .combat-lab .lab-enemy-letter.lunger { color: #d6affb; }
+.combat-lab .lab-enemy.grappler .lab-cell-glyph, .combat-lab .lab-grappler-letter { color: var(--lab-grab); }
 .combat-lab .lab-cell.is-threatened { background: #482833; border-color: #945057; }
 .combat-lab .lab-cell.is-threatened.lab-player { background: #663039; }
+.combat-lab .lab-cell.is-grab-threatened { border-color: var(--lab-grab); background-image: repeating-linear-gradient(135deg, #ffab8314 0, #ffab8314 4px, transparent 4px, transparent 8px); }
+.combat-lab .lab-cell.is-grabbed, .combat-lab .lab-cell.is-holding { box-shadow: inset 0 0 0 2px var(--lab-grab); }
+.combat-lab .lab-cell-hold { position: absolute; bottom: 2px; font-size: 8px; line-height: 1; letter-spacing: .03em; color: var(--lab-grab); }
+.combat-lab .lab-grab-mark { position: absolute; right: 2px; top: 1px; line-height: 1; font-size: 16px; color: var(--lab-grab); }
 .combat-lab .lab-threat-mark { position: absolute; top: -1px; left: 2px; line-height: 1; font-size: 14px; color: var(--lab-red); }
 .combat-lab .lab-cell.is-legal { border-color: #42796c; }
 .combat-lab .lab-cell.is-path { background: #334236; }
@@ -76,7 +85,9 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
 .combat-lab .lab-legend b { color: var(--lab-gold); font-family: monospace; }
 .combat-lab .lab-legend b.lab-player-letter { color: var(--lab-teal); }
 .combat-lab .lab-legend b.lab-lunger-letter { color: #d6affb; }
+.combat-lab .lab-legend b.lab-grappler-letter { color: var(--lab-grab); }
 .combat-lab .lab-legend-threat, .combat-lab .lab-legend-landing { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--lab-red); background: #482833; }
+.combat-lab .lab-legend-grab { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--lab-grab); background: repeating-linear-gradient(135deg, #ffab8344 0, #ffab8344 2px, transparent 2px, transparent 4px); }
 .combat-lab .lab-legend-landing { border: 1px dashed var(--lab-teal); background: #325052; }
 .combat-lab .lab-combo-strip { display: flex; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--lab-line); border-bottom: 1px solid var(--lab-line); font-size: 12px; }
 .combat-lab .lab-combo-strip strong { color: var(--lab-gold); letter-spacing: .05em; white-space: nowrap; }
@@ -106,6 +117,8 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
 .combat-lab .lab-incoming strong { font-size: 19px; }
 .combat-lab .is-danger, .combat-lab .lab-danger-text, .combat-lab .lab-invalid { color: var(--lab-red); }
 .combat-lab .is-safe { color: var(--lab-teal); }
+.combat-lab .lab-grab-text, .combat-lab .lab-forecast-list .lab-grab-text b { color: var(--lab-grab); }
+.combat-lab .lab-release-text, .combat-lab .lab-forecast-list .lab-release-text b { color: var(--lab-teal); }
 .combat-lab .lab-invalid { font-size: 12px; padding-bottom: 4px; }
 .combat-lab .lab-fine { font-size: 11px; color: var(--lab-muted); }
 .combat-lab .lab-confirm-row { display: flex; gap: 7px; margin-top: 14px; }
@@ -118,6 +131,8 @@ html:has(.combat-lab), body:has(.combat-lab) { margin: 0; padding: 0; background
 .combat-lab .lab-inspection-title { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .combat-lab .lab-inspection-title > span:last-child { margin-left: auto; color: var(--lab-muted); font-variant-numeric: tabular-nums; }
 .combat-lab .lab-inspection-title .lab-enemy-letter { margin: 0; font: 700 16px monospace; color: var(--lab-gold); }
+.combat-lab .lab-inspection-title .lab-enemy-letter.grappler { color: var(--lab-grab); }
+.combat-lab .lab-inspection-title .lab-enemy-letter.lunger { color: #d6affb; }
 .combat-lab .lab-inspection p { color: var(--lab-muted); margin-top: 4px; }
 .combat-lab .lab-throw-aim { display: flex; gap: 14px; align-items: center; padding-bottom: 14px; font-size: 11px; }
 .combat-lab .lab-throw-aim p { color: var(--lab-muted); margin-top: 4px; }

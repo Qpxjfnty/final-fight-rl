@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createEncounter, legalCommands, step } from '../src/engine';
 import { type Action, type Command, type State } from '../src/model';
 import { searchWins, combatSignature, type SearchOptions, type WinningSequence } from '../scripts/winning-search';
-import { finisherShare, verifyWin } from '../scripts/analyze-combat';
+import { allowsNoFinisher, finisherShare, verifyWin } from '../scripts/analyze-combat';
 
 const options: SearchOptions = { mode: 'exhaustive', maxBeats: 3, maxTransitions: 100_000, beamWidth: 16 };
 const emptyCounts = (): Record<Action, number> => ({ Step: 0, Strike: 0, Throw: 0, Vault: 0, Wait: 0 });
@@ -218,8 +218,7 @@ test('search rejects unsafe or invalid budgets and unknown modes', () => {
   assert.throws(() => searchWins(initial, { ...options, objective: 'unknown' as SearchOptions['objective'] }), RangeError);
 });
 
-const noFinisher = (state: State, command: Command): boolean => command.type !== 'Strike'
-  || state.player.combo?.targetId !== command.targetId || state.player.combo.hits !== 2;
+const noFinisher = allowsNoFinisher;
 
 test('a no-finisher policy keeps first and second strikes and rejects only third strikes on the same target', () => {
   const initial = tinyEncounter(12);
@@ -247,7 +246,7 @@ test('both modes can expose a win made of chip strikes while respecting a no-fin
   const initial = tinyEncounter(3);
   // Keep the reduced fixture safely stationary while a combo is deliberately broken.
   initial.enemies[0].intent = null;
-  initial.enemies[0].down = 8;
+  initial.enemies[0].recovery = 8;
   for (const mode of ['exhaustive', 'sampled'] as const) {
     const wins: WinningSequence[] = [];
     const result = searchWins(initial, {

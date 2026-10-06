@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createEncounter } from '../src/engine';
-import { parseOptions, runAnalysis, verifyWin, finisherShare, comboVerdict, summarizeDistribution } from '../scripts/analyze-combat';
+import { parseOptions, runAnalysis, verifyWin, finisherShare, comboVerdict, summarizeDistribution, allowsNoFinisher } from '../scripts/analyze-combat';
 import { type WinningSequence } from '../scripts/winning-search';
 
 test('analysis CLI rejects invalid or ambiguous budgets instead of silently changing the search', () => {
@@ -133,6 +133,22 @@ test('combo qualification measures actual finisher damage rather than just the p
   assert.equal(chip.firstComboAction, null);
   assert.equal(finisherShare(chip), 0);
   assert.equal(finisherShare({ ...chip, finisherDamage: 2 }), 0.5, 'Exactly half is not a majority.');
+});
+
+test('a downed chip kill is allowed by the no-finisher policy and never counted as finisher damage', () => {
+  const initial = createEncounter();
+  initial.enemies = [{ ...initial.enemies[0], x: 6, y: 4, hp: 1, down: 2 }];
+  initial.player.combo = { targetId: initial.enemies[0].id, hits: 2 };
+  const command = { type: 'Strike' as const, targetId: initial.enemies[0].id };
+  assert.equal(allowsNoFinisher(initial, command), true);
+  const metrics = verifyWin(initial, {
+    commands: [command], actionCount: 1, beats: 1, hp: 24,
+    actions: { Step: 0, Strike: 1, Throw: 0, Vault: 0, Wait: 0 },
+  });
+  assert.equal(metrics.chipStrikeDamage, 1);
+  assert.equal(metrics.finisherDamage, 0);
+  assert.equal(metrics.completedCombos, 0);
+  assert.equal(metrics.firstComboBeat, null);
 });
 
 test('a combo witness passes even alongside chip wins; missing witnesses are never called chip-only proof', () => {

@@ -21,8 +21,9 @@ test('generated rooms preserve combat rules and surround the player with six leg
     const state = generateAnalysisRoom(seed);
     assert.deepEqual(state.player, base.player);
     assert.equal(state.enemies.length, 6);
-    assert.equal(state.enemies.filter(enemy => enemy.kind === 'brawler').length, 4);
+    assert.equal(state.enemies.filter(enemy => enemy.kind === 'brawler').length, 2);
     assert.equal(state.enemies.filter(enemy => enemy.kind === 'lunger').length, 2);
+    assert.equal(state.enemies.filter(enemy => enemy.kind === 'grappler').length, 2);
     assert.equal(new Set(state.enemies.map(key)).size, 6, `Unique cells for seed ${seed}`);
     for (const enemy of state.enemies) {
       assert.ok(inside(enemy));

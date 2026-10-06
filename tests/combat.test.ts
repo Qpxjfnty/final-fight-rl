@@ -36,9 +36,9 @@ function apply(state: State, command: Command): State {
 
 function tell(attacker: Enemy, cells: Pos[]): void {
   attacker.intent = {
-    kind: attacker.kind === 'lunger' ? 'lunge' : 'punch',
+    kind: attacker.kind === 'lunger' ? 'lunge' : attacker.kind === 'grappler' ? 'grab' : 'punch',
     cells: cells.map(cell => ({ ...cell })),
-    damage: attacker.kind === 'lunger' ? 4 : 3,
+    damage: attacker.kind === 'lunger' ? 4 : attacker.kind === 'grappler' ? 0 : 3,
   };
 }
 
@@ -52,8 +52,10 @@ test('combat lab starts a repeatable surrounding encounter in a 9 by 7 interior'
   assert.deepEqual(position(state.player), { x: 5, y: 4 });
   assert.equal(state.player.hp, 24);
   assert.equal(state.enemies.length, 6);
-  assert.equal(state.enemies.filter(e => e.kind === 'brawler').length, 4);
+  assert.equal(state.enemies.filter(e => e.kind === 'brawler').length, 2);
   assert.equal(state.enemies.filter(e => e.kind === 'lunger').length, 2);
+  assert.equal(state.enemies.filter(e => e.kind === 'grappler').length, 2);
+  assert.equal(state.player.grabbedBy, null);
   assert.ok(state.enemies.every(e => e.hp === 12 && !e.intent && inside(e)));
   for (const direction of ['north', 'south', 'east', 'west']) {
     assert.ok(state.enemies.some(e => direction === 'north' ? e.y < state.player.y : direction === 'south' ? e.y > state.player.y : direction === 'east' ? e.x > state.player.x : e.x < state.player.x), direction);
@@ -327,7 +329,6 @@ test('changing strike targets starts a fresh combo instead of carrying progress'
   const state = fixture();
   const first = enemy(state, { x: 6, y: 4 });
   const second = enemy(state, { x: 4, y: 4 });
-  first.down = second.down = 5;
   const opened = apply(state, { type: 'Strike', targetId: first.id });
   const switched = apply(opened, { type: 'Strike', targetId: second.id });
   assert.deepEqual(switched.player.combo, { targetId: second.id, hits: 1 });
@@ -386,21 +387,21 @@ test('a collision throw damages and knocks down two enemies, without chain colli
   assert.equal(next.player.hp, 24);
 });
 
-test('a thrown enemy skips the current beat and two more, then tells before dealing damage', () => {
+test('a thrown enemy readies on the beat its knockdown expires and attacks only afterward', () => {
   const state = fixture();
   const body = enemy(state, { x: 5, y: 3 });
   enemy(state, { x: 3, y: 3 });
   let next = apply(state, { type: 'Throw', targetId: body.id, direction: { x: -1, y: 0 } });
   assert.deepEqual(position(find(next, body.id)), { x: 4, y: 3 });
-  for (const remaining of [1, 0]) {
-    next = apply(next, { type: 'Wait' });
-    assert.equal(find(next, body.id).down, remaining);
-    assert.equal(find(next, body.id).intent, null);
-    assert.deepEqual(position(find(next, body.id)), { x: 4, y: 3 });
-    assert.equal(next.player.hp, 24);
-  }
   next = apply(next, { type: 'Wait' });
-  assert.ok(find(next, body.id).intent);
+  assert.equal(find(next, body.id).down, 1);
+  assert.equal(find(next, body.id).intent, null);
+  assert.equal(next.player.hp, 24);
+  next = apply(next, { type: 'Wait' });
+  assert.equal(find(next, body.id).down, 0);
+  assert.equal(find(next, body.id).intent?.kind, 'punch');
+  assert.deepEqual(find(next, body.id).intent?.cells, [position(next.player)]);
+  assert.deepEqual(position(find(next, body.id)), { x: 4, y: 3 }, 'Waking readies an attack without moving.');
   assert.equal(next.player.hp, 24);
   next = apply(next, { type: 'Wait' });
   assert.ok(next.player.hp < 24);
@@ -443,7 +444,7 @@ test('throws collide with immediately adjacent enemies in all directions without
       assert.equal(predicted.valid, true);
       assert.deepEqual(predicted.path, []);
       assert.deepEqual(predicted.pushes, [{ enemyId: body.id, from: position(body), to: position(body) }]);
-      assert.deepEqual(predicted.hits, [{ enemyId: body.id, damage: 1 }, { enemyId: victim.id, damage: 1 }]);
+      assert.deepEqual(predicted.hits, [{ enemyId: body.id, damage: 1 }, { enemyId: victim.id, damage: down ? 0 : 1 }]);
       assert.deepEqual(new Set(predicted.interrupted), new Set([body.id, victim.id]));
       assert.deepEqual(new Set(predicted.knockdowns), new Set([body.id, victim.id]));
       assert.equal(predicted.incomingDamage, 0);
@@ -452,7 +453,7 @@ test('throws collide with immediately adjacent enemies in all directions without
       for (const source of [body, victim]) {
         const after = find(next, source.id);
         assert.deepEqual(position(after), position(source));
-        assert.equal(after.hp, 11);
+        assert.equal(after.hp, source.id === victim.id && down ? 12 : 11);
         assert.equal(after.down, 2);
         assert.equal(after.recovery, 0);
         assert.equal(after.intent, null);
@@ -610,17 +611,19 @@ test('invalid commands and all inspection preserve beat, combo, cooldown and the
   assert.deepEqual(state, original);
 });
 
-test('throwing an approaching crowd creates the safe three-strike opening that standing still lacks', () => {
+test('throwing a crowd then vaulting away creates a safe three-strike opening despite earlier wakes', () => {
   const state = fixture();
   const target = enemy(state, { x: 6, y: 4 });
   const incoming = enemy(state, { x: 5, y: 3 });
-  enemy(state, { x: 7, y: 3 }, 'lunger');
+  enemy(state, { x: 3, y: 3 }, 'lunger');
   tell(incoming, [position(state.player)]);
   const unsafe = apply(state, { type: 'Strike', targetId: target.id });
   assert.equal(unsafe.player.hp, 21);
   assert.equal(unsafe.player.combo, null);
-  let safe = apply(state, { type: 'Throw', targetId: incoming.id, direction: { x: 1, y: 0 } });
+  let safe = apply(state, { type: 'Throw', targetId: incoming.id, direction: { x: -1, y: 0 } });
   assert.equal(safe.player.hp, 24);
+  safe = apply(safe, { type: 'Vault', targetId: target.id });
+  assert.deepEqual(position(safe.player), { x: 7, y: 4 });
   for (let hit = 0; hit < 3; hit++) {
     const command: Command = { type: 'Strike', targetId: target.id };
     assert.equal(preview(safe, command).incomingDamage, 0);

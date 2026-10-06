@@ -1,5 +1,5 @@
 export interface Pos { x: number; y: number }
-export type EnemyKind = 'brawler' | 'lunger';
+export type EnemyKind = 'brawler' | 'lunger' | 'grappler';
 export type Action = 'Step' | 'Strike' | 'Throw' | 'Vault' | 'Wait';
 export type Command =
   | { type: 'Step'; target: Pos }
@@ -7,7 +7,7 @@ export type Command =
   | { type: 'Throw'; targetId: number; direction: Pos }
   | { type: 'Vault'; targetId: number }
   | { type: 'Wait' };
-export interface Intent { kind: 'punch' | 'lunge'; cells: Pos[]; damage: number }
+export interface Intent { kind: 'punch' | 'lunge' | 'grab'; cells: Pos[]; damage: number }
 export interface Enemy extends Pos {
   id: number; kind: EnemyKind; hp: number; maxHp: number;
   intent: Intent | null; down: number; recovery: number;
@@ -15,6 +15,7 @@ export interface Enemy extends Pos {
 export interface Player extends Pos {
   hp: number; maxHp: number; combo: { targetId: number; hits: 1 | 2 } | null;
   vaultCooldown: number;
+  grabbedBy: number | null;
 }
 export interface Stats {
   completedCombos: number; brokenCombos: number; finisherKills: number;
@@ -33,13 +34,14 @@ export interface Preview {
   lunges: { enemyId: number; from: Pos; to: Pos }[];
   destination: Pos | null; path: Pos[]; knockdowns: number[];
   interrupted: number[]; cancelled: number[]; threats: Threat[]; incomingDamage: number;
+  grabs: number[]; releases: number[];
 }
 export interface StepResult { accepted: boolean; state: State; events: string[]; reason?: string }
 export const CONFIG = {
   width: 9, height: 7, playerHp: 24, enemyHp: 12,
   strikeDamage: [1, 1, 10] as readonly number[], throwDamage: 1,
   throwRange: 3, knockdownBeats: 3, vaultCooldown: 3,
-  punchDamage: 3, lungeDamage: 4, lungeRange: 3,
+  punchDamage: 3, lungeDamage: 4, lungeRange: 3, grapplerSteps: 2,
 } as const;
 export const DIRS: Pos[] = [
   { x: 0, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 0 }, { x: 1, y: 1 },

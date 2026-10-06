@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createEncounter, step } from '../src/engine';
+import { createEncounter, preview, step } from '../src/engine';
 import { type Action, type Command, type State } from '../src/model';
 import { generateAnalysisRoom } from './analysis-rooms';
 import { searchWins, type SearchMode, type WinningSequence } from './winning-search';
@@ -88,7 +88,7 @@ const METRICS: TotalMetric[] = [
   'chipStrikeDamage', 'finisherDamage', 'throwDamage', 'damageTaken',
 ];
 export const allowsNoFinisher = (state: State, command: Command): boolean =>
-  command.type !== 'Strike' || state.player.combo?.targetId !== command.targetId || state.player.combo.hits !== 2;
+  command.type !== 'Strike' || preview(state, command).comboStage !== 3;
 
 /** Verify every witness and measure actual HP removed, including overkill clipping. */
 export function verifyWin(initial: State, win: WinningSequence): WinMetrics {
@@ -107,7 +107,7 @@ export function verifyWin(initial: State, win: WinningSequence): WinMetrics {
     const removed = state.enemies.reduce((sum, enemy) =>
       sum + enemy.hp - (result.state.enemies.find(after => after.id === enemy.id)?.hp ?? 0), 0);
     if (command.type === 'Strike') {
-      if (allowsNoFinisher(state, command)) {
+      if (result.state.stats.completedCombos === state.stats.completedCombos) {
         metrics.chipStrikeActions += 1;
         metrics.chipStrikeDamage += removed;
       } else metrics.finisherDamage += removed;

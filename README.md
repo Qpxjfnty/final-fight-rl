@@ -8,17 +8,23 @@ The demo runs entirely in the browser on desktop or tablet. No installation, acc
 
 ## The fight
 
-Six enemies surround you in a 9×7 arena. You have 24 HP; each enemy has 12 HP. Your five actions are **Step, Strike, Throw, Vault, and Wait**. One valid action normally advances one beat. If your **very first combat action is Step**, that one move is free: enemies wait, the beat and timers stay unchanged, and you act again. Any other first action gives up this opening move; Vault is never free. Inspection, targeting, cancellation, and invalid actions are free and do not spend the opening.
+Six enemies surround you in a 9×7 arena: **two brawlers (B), two lungers (L), and two grapplers (G)**. You have 24 HP; each enemy has 12 HP. Your five actions are **Step, Strike, Throw, Vault, and Wait**. One valid action normally advances one beat. If your **very first combat action is Step**, that one move is free: enemies wait, the beat and timers stay unchanged, and you act again. Any other first action gives up this opening move; Vault is never free. Inspection, targeting, cancellation, and invalid actions are free and do not spend the opening.
 
-- **Strike:** hit and interrupt one adjacent enemy. Three consecutive strikes against the same target deal **1 + 1 + 10 damage**, defeating a fresh enemy. Changing target or action, or taking damage, breaks the combo.
-- **Throw:** choose an adjacent enemy and a direction. Throw it up to three cells for 1 damage. A collision deals 1 damage to the first enemy hit; both enemies are knocked down for the throw beat and two further beats. The throw stops before a wall or body. You can throw into an immediately adjacent enemy even with no travel space: both stay in their cells and fall down. A wall or the player alone cannot absorb a throw with no travel space.
-- **Vault:** cross an adjacent enemy to the empty cell behind it. Deals no damage and becomes available again after three other actions. It does not protect you from an attack aimed at the landing cell.
+- **Strike:** hit and interrupt one adjacent enemy. Three consecutive strikes against the same standing target deal **1 + 1 + 10 damage**, defeating a fresh enemy. Changing target or action, taking damage, or being grabbed breaks the combo. Striking a downed target deals **1 damage but cannot start or advance a combo**; existing progress against that same target stays unchanged.
+- **Throw:** choose an adjacent enemy and a direction. Throw it up to three cells for 1 damage. A collision deals 1 damage to the first enemy hit; both enemies are knocked down for the throw beat and two further beats. Already downed enemies take **no damage from throws or body collisions**, but remain throwable and can be knocked down again. The throw stops before a wall or body. You can throw into an immediately adjacent enemy even with no travel space: both stay in their cells and fall down. A wall or the player alone cannot absorb a throw with no travel space. A grappler preparing its own grab cannot be thrown directly.
+- **Vault:** cross an adjacent enemy to the empty cell behind it. Deals no damage and becomes available again after three other actions. A legal Vault over any adjacent enemy releases a grab, with the normal cooldown. It does not protect you from an attack aimed at the landing cell.
 - **Step:** move to an adjacent empty cell in any of eight directions. A diagonal step can pass one occupied side cell, but cannot squeeze between two enemies.
 - **Wait:** spend one beat in place.
 
 Brawlers threaten adjacent cells; lungers threaten straight paths from farther away. Red cells show attacks committed for the next beat. If you dodge a brawler's committed attack, it **cancels and stays put without recovery**. A lunger still advances along its committed path to its original landing cell—the cell before its original target—even if you dodge. Bodies stop its advance early. If it cannot hit you, it has **no recovery**. Neither enemy retargets or prepares another attack that turn; both can act on the following beat. An attack that hits requires a recovery beat.
 
-The forecast shows player movement, throws, lunger landing cells, damage, interrupts, knockdowns, missed or cancelled attacks, and incoming damage before you confirm. Clear the arena to win; defeat or victory offers a restart of the same encounter. Balance remains provisional.
+Grapplers move up to **two cells**, then prepare a grab for the next beat. Orange brackets mark the grab target. You can dodge it, interrupt it with Strike, or hit the grappler with a thrown body; you cannot use Throw directly on a grappler while it prepares its own grab. A missed grab spends that turn without recovery, so the grappler can act again on the following beat.
+
+A successful grab deals no damage but **locks Step and Throw**. While held, you can Strike an adjacent enemy for 1 damage with no combo progress, Vault, or Wait. Striking the grappler holding you releases the hold; striking another enemy does not. A legal Vault over any adjacent enemy also releases you, and taking damage breaks the hold. A grab provides no protection from other enemies' attacks.
+
+Down counters show the number of beats until standing. On the beat a counter reaches zero, the enemy **stands and immediately prepares an attack or grab from its current cell** if it can reach you and was not interrupted. That tell resolves after your next action. There is no additional idle beat after standing.
+
+The forecast shows player movement, throws, lunger landing cells, damage, interrupts, knockdowns, missed or cancelled attacks, releases, and incoming grabs or damage before you confirm. A zero-damage grab is still shown as danger. Clear the arena to win; defeat or victory offers a restart of the same encounter. Balance remains provisional.
 
 ## Controls
 
@@ -44,7 +50,7 @@ npm run analyze     # Generate analysis rooms and record winning action sequence
 npm run preview     # Serve the built dist/ locally
 ```
 
-The combat tests cover the one-time free opening Step, timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
+The combat tests cover the one-time free opening Step, timing, dodged lunges, cancellation without recovery, combo breaks, throw collisions, downed chip strikes and wake-up tells, grappler approach and grabs, hold restrictions and escapes, vault cooldowns, deterministic previews, and state invariants. The simulation searches for a winning tactical sequence and writes ignored evidence to `work/qa/combat-lab/`. It checks feasibility, not human difficulty or enjoyment.
 
 ## Combo viability and winning-sequence analysis
 

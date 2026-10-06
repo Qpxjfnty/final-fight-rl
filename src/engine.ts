@@ -24,6 +24,7 @@ function emptyPreview(): Preview {
   return {
     valid: false, reason: '', freeStep: false, comboStage: 0, hits: [], pushes: [], lunges: [], destination: null,
     path: [], knockdowns: [], interrupted: [], cancelled: [], threats: [], incomingDamage: 0,
+    grabs: [], releases: [],
   };
 }
 
@@ -48,9 +49,19 @@ function throwPath(state: State, enemy: Enemy, direction: Pos): ThrowPath | null
     : null;
 }
 
+function grabber(state: State): Enemy | undefined {
+  if (state.player.hp <= 0) return undefined;
+  return state.enemies.find(enemy => enemy.id === state.player.grabbedBy
+    && enemy.kind === 'grappler' && enemy.hp > 0 && enemy.down === 0
+    && distance(enemy, state.player) === 1);
+}
+
 function validationError(state: State, command: Command): string | null {
   if (state.phase !== 'combat') return 'This fight has ended. Restart to fight again.';
   if (command.type === 'Wait') return null;
+  if (grabber(state) && (command.type === 'Step' || command.type === 'Throw')) {
+    return 'You are grabbed. Strike the grappler or Vault to break free.';
+  }
   if (command.type === 'Step') {
     if (!inside(command.target)) return 'Stay inside the arena.';
     if (distance(state.player, command.target) !== 1) return 'Step to one neighboring cell.';
@@ -63,6 +74,9 @@ function validationError(state: State, command: Command): string | null {
   if (distance(state.player, target) !== 1) return 'Choose an adjacent enemy.';
   if (command.type === 'Strike') return null;
   if (command.type === 'Throw') {
+    if (target.kind === 'grappler' && target.intent?.kind === 'grab') {
+      return 'A preparing grab cannot be interrupted by a direct Throw. Strike, collide another enemy into it, or move away.';
+    }
     return throwPath(state, target, command.direction) ? null : 'There is no room to throw or enemy to collide with in that direction.';
   }
   if (state.player.vaultCooldown > 0) return `Vault needs ${state.player.vaultCooldown} more action${state.player.vaultCooldown === 1 ? '' : 's'}.`;
@@ -83,7 +97,12 @@ function resolveLunge(state: State, enemy: Enemy, intent: Intent): { landing: Po
   return { landing, canHit: false };
 }
 
-function makeIntent(state: State, enemy: Enemy, from: Pos = enemy): Intent | null {
+function makeIntent(state: State, enemy: Enemy, from: Pos = enemy, pathfinding = false): Intent | null {
+  if (enemy.kind === 'grappler') {
+    return distance(from, state.player) === 1 && (pathfinding || state.player.grabbedBy == null)
+      ? { kind: 'grab', cells: [position(state.player)], damage: 0 }
+      : null;
+  }
   if (enemy.kind === 'brawler') {
     return distance(from, state.player) === 1
       ? { kind: 'punch', cells: [position(state.player)], damage: CONFIG.punchDamage }
@@ -109,7 +128,7 @@ function nextEnemyStep(state: State, enemy: Enemy): Pos | null {
   const seen = new Set([`${enemy.x},${enemy.y}`]);
   for (let index = 0; index < queue.length; index += 1) {
     const node = queue[index];
-    if (node.first && makeIntent(state, enemy, node.cell)) return node.first;
+    if (node.first && makeIntent(state, enemy, node.cell, true)) return node.first;
     for (const direction of DIRS) {
       const cell = add(node.cell, direction);
       const key = `${cell.x},${cell.y}`;
@@ -142,13 +161,30 @@ function simulate(original: State, command: Command): Simulation {
   const suppressed = new Set<number>();
   const spentTurn = new Set<number>();
   const justAttacked = new Set<number>();
+  const immune = new Set(original.enemies.filter(enemy => enemy.down > 0).map(enemy => enemy.id));
+  const heldAtStart = grabber(original);
+  const wasHeld = Boolean(heldAtStart);
+  // A holding enemy spends this entire beat even if an action or another
+  // enemy's damage releases its hold before its place in the resolution order.
+  if (heldAtStart) spentTurn.add(heldAtStart.id);
+  const releaseGrab = (reason: string): void => {
+    const id = state.player.grabbedBy;
+    if (id == null) return;
+    state.player.grabbedBy = null;
+    details.releases.push(id);
+    events.push(`Enemy ${id}'s hold breaks: ${reason}.`);
+  };
+  const cleanGrab = (): void => {
+    if (state.player.grabbedBy != null && !grabber(state)) releaseGrab('the grappler can no longer hold you');
+  };
+  cleanGrab();
   const freeStep = state.openingStepAvailable && state.beat === 0 && command.type === 'Step';
   details.freeStep = freeStep;
   state.openingStepAvailable = false;
   if (!freeStep) state.beat += 1;
   state.stats.actions[command.type] += 1;
 
-  if (command.type !== 'Strike' || state.player.combo?.targetId !== command.targetId) breakCombo(state, events);
+  if (wasHeld || command.type !== 'Strike' || state.player.combo?.targetId !== command.targetId) breakCombo(state, events);
   if (!freeStep && command.type !== 'Vault' && state.player.vaultCooldown > 0) state.player.vaultCooldown -= 1;
 
   const suppress = (enemy: Enemy): void => {
@@ -156,10 +192,12 @@ function simulate(original: State, command: Command): Simulation {
     if (enemy.intent) details.interrupted.push(enemy.id);
     enemy.intent = null;
   };
-  const hurtEnemy = (enemy: Enemy, damage: number): void => {
-    details.hits.push({ enemyId: enemy.id, damage });
-    enemy.hp = Math.max(0, enemy.hp - damage);
+  const hurtEnemy = (enemy: Enemy, damage: number, strike = false): number => {
+    const applied = immune.has(enemy.id) && !strike ? 0 : damage;
+    details.hits.push({ enemyId: enemy.id, damage: applied });
+    enemy.hp = Math.max(0, enemy.hp - applied);
     if (enemy.hp === 0) events.push(`Enemy ${enemy.id} is defeated.`);
+    return applied;
   };
 
   if (command.type === 'Step') {
@@ -174,19 +212,29 @@ function simulate(original: State, command: Command): Simulation {
   } else {
     const target = state.enemies.find(enemy => enemy.id === command.targetId)!;
     if (command.type === 'Strike') {
-      const stage = state.player.combo?.targetId === target.id ? state.player.combo.hits + 1 : 1;
-      details.comboStage = stage as 1 | 2 | 3;
-      const damage = CONFIG.strikeDamage[stage - 1];
       suppress(target);
-      events.push(`Strike ${stage}/3 hits enemy ${target.id} for ${damage}.`);
-      hurtEnemy(target, damage);
-      if (stage === 3) {
-        state.stats.completedCombos += 1;
-        if (target.hp === 0) state.stats.finisherKills += 1;
-        state.player.combo = null;
+      if (wasHeld) {
+        const applied = hurtEnemy(target, CONFIG.strikeDamage[0], true);
+        events.push(`Held Strike hits enemy ${target.id} for ${applied}; it does not advance a combo.`);
+      } else if (immune.has(target.id)) {
+        hurtEnemy(target, CONFIG.strikeDamage[0], true);
+        if (target.hp === 0) state.player.combo = null;
+        events.push(`Enemy ${target.id} is down: Strike chips for 1 and does not advance a combo.`);
       } else {
-        state.player.combo = target.hp > 0 ? { targetId: target.id, hits: stage as 1 | 2 } : null;
+        const stage = state.player.combo?.targetId === target.id ? state.player.combo.hits + 1 : 1;
+        details.comboStage = stage as 1 | 2 | 3;
+        const damage = CONFIG.strikeDamage[stage - 1];
+        events.push(`Strike ${stage}/3 hits enemy ${target.id} for ${damage}.`);
+        hurtEnemy(target, damage);
+        if (stage === 3) {
+          state.stats.completedCombos += 1;
+          if (target.hp === 0) state.stats.finisherKills += 1;
+          state.player.combo = null;
+        } else {
+          state.player.combo = target.hp > 0 ? { targetId: target.id, hits: stage as 1 | 2 } : null;
+        }
       }
+      if (state.player.grabbedBy === target.id) releaseGrab('you struck the grappler');
     } else if (command.type === 'Throw') {
       const trajectory = throwPath(state, target, command.direction)!;
       details.path = trajectory.path.map(position);
@@ -197,10 +245,12 @@ function simulate(original: State, command: Command): Simulation {
         : `Throw enemy ${target.id} into adjacent enemy ${trajectory.collision!.id}; neither changes cells.`);
       for (const enemy of [target, ...(trajectory.collision ? [trajectory.collision] : [])]) {
         suppress(enemy);
+        // A fresh Throw damages a standing target before knocking it down.
+        // Bodies already down at the start of this action remain invulnerable.
+        hurtEnemy(enemy, CONFIG.throwDamage);
         enemy.down = CONFIG.knockdownBeats;
         enemy.recovery = 0;
         details.knockdowns.push(enemy.id);
-        hurtEnemy(enemy, CONFIG.throwDamage);
       }
       if (trajectory.collision) events.push(`The thrown body knocks down enemy ${trajectory.collision.id}.`);
     } else {
@@ -209,9 +259,11 @@ function simulate(original: State, command: Command): Simulation {
       details.path = [position(target), position(destination)];
       Object.assign(state.player, destination);
       state.player.vaultCooldown = CONFIG.vaultCooldown;
+      releaseGrab('you Vaulted free');
       events.push(`Vault over enemy ${target.id} to ${destination.x},${destination.y}.`);
     }
   }
+  cleanGrab();
 
   if (freeStep) {
     state.log = [...state.log, ...events.map(event => `[${state.beat}] ${event}`)].slice(-80);
@@ -221,7 +273,8 @@ function simulate(original: State, command: Command): Simulation {
   // Resolve only the tells already present before this beat. Every such enemy
   // spends its turn, whether it attacks, is interrupted, or cancels for no target.
   for (const enemy of living(state)) {
-    if (suppressed.has(enemy.id) || enemy.down > 0 || enemy.recovery > 0) {
+    if (spentTurn.has(enemy.id) || state.player.grabbedBy === enemy.id
+      || suppressed.has(enemy.id) || enemy.down > 0 || enemy.recovery > 0) {
       spentTurn.add(enemy.id);
       enemy.intent = null;
       continue;
@@ -233,7 +286,8 @@ function simulate(original: State, command: Command): Simulation {
     const lunge = intent.kind === 'lunge' ? resolveLunge(state, enemy, intent) : null;
     const canHit = intent.kind === 'lunge'
       ? lunge!.canHit
-      : distance(enemy, state.player) === 1 && intent.cells.some(cell => equal(cell, state.player));
+      : distance(enemy, state.player) === 1 && intent.cells.some(cell => equal(cell, state.player))
+        && (intent.kind !== 'grab' || (state.player.hp > 0 && state.player.grabbedBy == null));
     if (lunge && !equal(enemy, lunge.landing)) {
       details.lunges.push({ enemyId: enemy.id, from: position(enemy), to: position(lunge.landing) });
       Object.assign(enemy, lunge.landing);
@@ -248,9 +302,16 @@ function simulate(original: State, command: Command): Simulation {
     details.threats.push({ enemyId: enemy.id, cells: intent.cells.map(position), damage: intent.damage });
     details.incomingDamage += intent.damage;
     breakCombo(state, events);
+    if (intent.kind === 'grab') {
+      state.player.grabbedBy = enemy.id;
+      details.grabs.push(enemy.id);
+      events.push(`Enemy ${enemy.id} grabs you. Strike the grappler or Vault to break free.`);
+      continue;
+    }
     const damage = Math.min(state.player.hp, intent.damage);
     state.player.hp -= damage;
     state.stats.damageTaken += damage;
+    if (damage > 0) releaseGrab('incoming damage broke the hold');
     enemy.recovery = 1;
     justAttacked.add(enemy.id);
     events.push(`Enemy ${enemy.id} ${intent.kind === 'lunge' ? 'lunges' : 'punches'} for ${intent.damage}.`);
@@ -267,9 +328,15 @@ function simulate(original: State, command: Command): Simulation {
       if (spentTurn.has(enemy.id)) continue;
       let intent = makeIntent(state, enemy);
       let moved = false;
-      if (!intent) {
+      const steps = enemy.kind === 'grappler' ? CONFIG.grapplerSteps : 1;
+      for (let n = 0; !intent && n < steps; n += 1) {
+        // Another grappler may approach a held player, but stops beside them
+        // instead of circling or preparing a second hold.
+        if (enemy.kind === 'grappler' && state.player.grabbedBy != null && distance(enemy, state.player) === 1) break;
         const destination = nextEnemyStep(state, enemy);
-        if (destination) { Object.assign(enemy, destination); moved = true; }
+        if (!destination) break;
+        Object.assign(enemy, destination);
+        moved = true;
         intent = makeIntent(state, enemy);
       }
       enemy.intent = intent;
@@ -278,22 +345,30 @@ function simulate(original: State, command: Command): Simulation {
   }
 
   for (const enemy of state.enemies) {
+    const wakes = enemy.down === 1;
     if (enemy.down > 0) enemy.down -= 1;
     if (enemy.recovery > 0 && !justAttacked.has(enemy.id)) enemy.recovery -= 1;
     if (enemy.hp === 0) { enemy.intent = null; enemy.down = 0; enemy.recovery = 0; }
+    else if (wakes && state.phase === 'combat' && !suppressed.has(enemy.id) && enemy.recovery === 0) {
+      // Waking enemies can telegraph from their current cell, without moving
+      // or resolving that new tell until a later player action.
+      enemy.intent = makeIntent(state, enemy);
+      if (enemy.intent) events.push(`Enemy ${enemy.id} stands and readies a ${enemy.intent.kind} for next beat.`);
+    }
   }
+  cleanGrab();
   state.log = [...state.log, ...events.map(event => `[${state.beat}] ${event}`)].slice(-80);
   return { result: { accepted: true, state, events }, preview: details };
 }
 
 export function createEncounter(): State {
   const placements: [Enemy['kind'], number, number][] = [
-    ['brawler', 5, 2], ['brawler', 7, 3], ['brawler', 5, 6], ['brawler', 3, 5],
+    ['grappler', 5, 2], ['brawler', 7, 3], ['brawler', 5, 6], ['grappler', 3, 5],
     ['lunger', 2, 4], ['lunger', 8, 4],
   ];
   return {
-    version: 'combat-lab-v1', phase: 'combat', beat: 0, openingStepAvailable: true,
-    player: { x: 5, y: 4, hp: CONFIG.playerHp, maxHp: CONFIG.playerHp, combo: null, vaultCooldown: 0 },
+    version: 'combat-lab-v2', phase: 'combat', beat: 0, openingStepAvailable: true,
+    player: { x: 5, y: 4, hp: CONFIG.playerHp, maxHp: CONFIG.playerHp, combo: null, vaultCooldown: 0, grabbedBy: null },
     enemies: placements.map(([kind, x, y], index) => ({
       id: index + 1, kind, x, y, hp: CONFIG.enemyHp, maxHp: CONFIG.enemyHp,
       intent: null, down: 0, recovery: 0,
