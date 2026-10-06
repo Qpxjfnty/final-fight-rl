@@ -15,7 +15,7 @@ function canWalk(state: State, from: Pos, to: Pos, ignoredId?: number): boolean 
   if (distance(from, to) !== 1 || !free(state, to, ignoredId)) return false;
   if (from.x !== to.x && from.y !== to.y) {
     return free(state, { x: from.x, y: to.y }, ignoredId)
-      && free(state, { x: to.x, y: from.y }, ignoredId);
+      || free(state, { x: to.x, y: from.y }, ignoredId);
   }
   return true;
 }
@@ -52,7 +52,7 @@ function validationError(state: State, command: Command): string | null {
     if (!inside(command.target)) return 'Stay inside the arena.';
     if (distance(state.player, command.target) !== 1) return 'Step to one neighboring cell.';
     if (!free(state, command.target)) return 'That cell is occupied.';
-    if (!canWalk(state, state.player, command.target)) return 'You cannot step diagonally through an occupied corner.';
+    if (!canWalk(state, state.player, command.target)) return 'You cannot step diagonally between two enemies.';
     return null;
   }
   const target = state.enemies.find(enemy => enemy.id === command.targetId && enemy.hp > 0);

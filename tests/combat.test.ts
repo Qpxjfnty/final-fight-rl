@@ -472,11 +472,52 @@ test('vault does not protect the player when the landing cell remains in a commi
   assert.equal(find(next, attacker.id).recovery, 1);
 });
 
-test('diagonal steps cannot pass through an occupied corner', () => {
+test('diagonal steps pass one occupied side cell but never squeeze between two enemies', () => {
+  for (const direction of DIRS.filter(direction => direction.x && direction.y)) {
+    for (let mask = 0; mask < 4; mask++) {
+      const state = fixture();
+      if (mask & 1) enemy(state, add(state.player, { x: direction.x, y: 0 }));
+      if (mask & 2) enemy(state, add(state.player, { x: 0, y: direction.y }));
+      const command: Command = { type: 'Step', target: add(state.player, direction) };
+      const original = structuredClone(state);
+      const allowed = mask !== 3;
+      assert.equal(preview(state, command).valid, allowed);
+      const result = step(state, command);
+      assert.equal(result.accepted, allowed);
+      if (allowed) assert.deepEqual(position(result.state.player), command.target);
+      else assert.match(result.reason!, /between two enemies/);
+      assert.deepEqual(state, original);
+    }
+  }
+});
+
+test('diagonal destinations must be empty, and downed bodies still block a two-enemy corner', () => {
   const state = fixture();
-  enemy(state, { x: 6, y: 4 });
-  assert.equal(preview(state, { type: 'Step', target: { x: 6, y: 5 } }).valid, false);
-  assert.equal(preview(state, { type: 'Step', target: { x: 4, y: 5 } }).valid, true);
+  const east = enemy(state, { x: 6, y: 4 });
+  const south = enemy(state, { x: 5, y: 5 });
+  south.down = 2;
+  const command: Command = { type: 'Step', target: { x: 6, y: 5 } };
+  assert.equal(preview(state, command).valid, false);
+  east.hp = 0;
+  assert.equal(preview(state, command).valid, true, 'A defeated enemy no longer closes the corner.');
+  enemy(state, command.target);
+  assert.equal(preview(state, command).valid, false, 'Passing a corner does not allow an occupied destination.');
+});
+
+test('a blocked diagonal opening move preserves the free Step for a legal one-corner move', () => {
+  const state = createEncounter();
+  Object.assign(state.enemies[0], { x: 6, y: 4 });
+  Object.assign(state.enemies[1], { x: 5, y: 5 });
+  const blocked: Command = { type: 'Step', target: { x: 6, y: 5 } };
+  const result = step(state, blocked);
+  assert.equal(result.accepted, false);
+  assert.equal(result.state.openingStepAvailable, true);
+  const allowed: Command = { type: 'Step', target: { x: 6, y: 3 } };
+  assert.equal(preview(state, allowed).freeStep, true);
+  const moved = step(state, allowed);
+  assert.equal(moved.accepted, true);
+  assert.equal(moved.state.beat, 0);
+  assert.deepEqual(moved.state.enemies, state.enemies);
 });
 
 test('invalid commands and all inspection preserve beat, combo, cooldown and the entire input state', () => {

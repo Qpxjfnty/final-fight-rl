@@ -13,7 +13,7 @@ Six enemies surround you in a 9×7 arena. You have 24 HP; each enemy has 12 HP. 
 - **Strike:** hit and interrupt one adjacent enemy. Three consecutive strikes against the same target deal **1 + 1 + 10 damage**, defeating a fresh enemy. Changing target or action, or taking damage, breaks the combo.
 - **Throw:** choose an adjacent enemy and a direction. Throw it up to three cells for 1 damage. A collision deals 1 damage to the first enemy hit; both enemies are knocked down for the throw beat and two further beats. The throw stops before a wall or body and requires an empty landing cell.
 - **Vault:** cross an adjacent enemy to the empty cell behind it. Deals no damage and becomes available again after three other actions. It does not protect you from an attack aimed at the landing cell.
-- **Step:** move to an adjacent empty cell in any of eight directions. You cannot cut diagonally through occupied corners.
+- **Step:** move to an adjacent empty cell in any of eight directions. A diagonal step can pass one occupied side cell, but cannot squeeze between two enemies.
 - **Wait:** spend one beat in place.
 
 Brawlers threaten adjacent cells; lungers threaten straight paths from farther away. Red cells show attacks committed for the next beat. If you dodge a brawler's committed attack, it **cancels and stays put without recovery**. A lunger still advances along its committed path to its original landing cell—the cell before its original target—even if you dodge. Bodies stop its advance early. If it cannot hit you, it has **no recovery**. Neither enemy retargets or prepares another attack that turn; both can act on the following beat. An attack that hits requires a recovery beat.
@@ -58,7 +58,7 @@ npm run analyze -- --mode exhaustive --rooms 0 --max-beats 4 --max-transitions 1
 npm run analyze -- --help
 ```
 
-The default searches the fixed demo plus four generated rooms, using seeds 1–4, a 32-action horizon, a beam width of 96, and a budget of 75,000 simulated actions per room. Each generated room starts with six enemies surrounding the player, at distances of two to three cells. This generator belongs to the analysis tooling; it does not replace the live demo's layout.
+The default searches the fixed demo plus four generated rooms, using seeds 1–4, a 40-action horizon, a beam width of 96, and a budget of 75,000 simulated actions per room. Each generated room starts with six enemies surrounding the player, at distances of two to three cells. This generator belongs to the analysis tooling; it does not replace the live demo's layout.
 
 Each run creates a new directory under `work/qa/combat-analysis/` with:
 

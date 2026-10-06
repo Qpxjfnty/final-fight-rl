@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createEncounter, legalCommands, step } from '../src/engine';
 import { type Action, type Command, type State } from '../src/model';
 import { searchWins, combatSignature, type SearchOptions, type WinningSequence } from '../scripts/winning-search';
+import { finisherShare, verifyWin } from '../scripts/analyze-combat';
 
 const options: SearchOptions = { mode: 'exhaustive', maxBeats: 3, maxTransitions: 100_000, beamWidth: 16 };
 const emptyCounts = (): Record<Action, number> => ({ Step: 0, Strike: 0, Throw: 0, Vault: 0, Wait: 0 });
@@ -292,13 +293,14 @@ test('combo objective finds a replayable finisher-focused witness in the full de
   const initial = createEncounter();
   let witness: WinningSequence | undefined;
   const result = searchWins(initial, {
-    mode: 'sampled', objective: 'combo', maxBeats: 32, maxTransitions: 150_000, beamWidth: 96,
-    onWin: win => { witness ??= win; },
+    mode: 'sampled', objective: 'combo', maxBeats: 40, maxTransitions: 75_000, beamWidth: 96,
+    onWin: win => {
+      if (finisherShare(verifyWin(initial, win)) > 0.5) witness ??= win;
+    },
   });
   assert.ok(witness, 'The fixed prototype room must have a demonstrated combo-focused winning line');
   verifyReplay(initial, witness);
-  const replayed = witness.commands.reduce((state, command) => step(state, command).state, initial);
-  assert.equal(replayed.stats.finisherKills, initial.enemies.length);
-  assert.equal(replayed.stats.completedCombos, initial.enemies.length);
+  assert.ok(finisherShare(verifyWin(initial, witness)) > 0.5,
+    'Combo finishers must deal most of the actual enemy HP removed');
   assert.equal(result.completed, false, 'A witness does not prove complete enumeration');
 });

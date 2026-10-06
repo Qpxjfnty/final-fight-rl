@@ -18,7 +18,7 @@ Usage: npm run analyze -- [options]
   --mode sampled|exhaustive  Search strategy (default: sampled)
   --rooms N                 Generated rooms in addition to the fixed demo (default: 4)
   --seed N                  First unsigned 32-bit room seed (default: 1)
-  --max-beats N             Maximum player actions, including a free Step (default: 32)
+  --max-beats N             Maximum player actions, including a free Step (default: 40)
   --objective combo|balanced  Sampled search priority (default: combo)
   --max-transitions N       Simulated-action budget per room (default: 75000)
   --beam-width N            Paths retained per sampled-search layer (default: 96)
@@ -36,7 +36,7 @@ in a partial search flags review, not proof that only chip strategies can win.
 
 export function parseOptions(args: string[]): AnalysisOptions {
   const options: AnalysisOptions = {
-    mode: 'sampled', objective: 'combo', rooms: 4, seed: 1, maxBeats: 32, maxTransitions: 75_000, beamWidth: 96,
+    mode: 'sampled', objective: 'combo', rooms: 4, seed: 1, maxBeats: 40, maxTransitions: 75_000, beamWidth: 96,
     output: fileURLToPath(new URL('../work/qa/combat-analysis/', import.meta.url)),
   };
   const integerKeys = {
